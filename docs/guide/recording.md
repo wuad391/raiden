@@ -126,6 +126,37 @@ hardware. Only successful demonstrations are included when you run `rd convert`.
 If no mark is given, the status stays `pending`. You can correct it later in
 the [console](console.md).
 
+### Event marking during a trajectory (`--marking-mode`)
+
+For tasks that need fine-grained event annotations inside a trajectory (e.g.
+sub-task boundaries), pass `--marking-mode`:
+
+```bash
+rd record --marking-mode
+```
+
+In this mode the foot pedals are repurposed **while a recording is in
+progress**:
+
+| Phase | Pedal | Action |
+|---|---|---|
+| Before recording | Left | Start recording |
+| During recording | Left | Soft e-stop (unchanged) |
+| During recording | Middle | Log an **event marker** at the current camera-clock timestamp |
+| During recording | Right | **End the trajectory** (no immediate verdict) |
+| Verdict prompt | Left | No-op |
+| Verdict prompt | Middle | Mark as **Success** |
+| Verdict prompt | Right | Mark as **Failure** |
+
+After the verdict prompt the cycle resets: the next "before recording" wait
+behaves identically to normal mode. Outside `--marking-mode`, foot-pedal
+behaviour is unchanged.
+
+Event markers are written to `metadata.json` under the `event_markers` key as
+a list of `{"t": <ns>, "elapsed_s": <seconds>}` entries. The `t` field is on
+the same clock as `timestamps` in `robot_data.npz` and the converted camera
+frames.
+
 After recording, convert the raw camera files with [rd convert](conversion.md).
 
 ## Uploading to S3

@@ -114,6 +114,10 @@ class DemonstrationRecorder:
         self._robot_frames: List[Dict] = []
         self._start_time: float = 0.0
 
+        # Event markers (only used in marking mode).  Each entry is a tuple
+        # of (camera-clock ns timestamp, seconds-since-recording-start).
+        self._event_markers: List[Dict] = []
+
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
@@ -128,6 +132,7 @@ class DemonstrationRecorder:
         self.is_recording = True
         self._start_time = time.monotonic()
         self._robot_frames = []
+        self._event_markers = []
         self._stop_event.clear()
         self._threads = []
         self._camera_start_times_ns: Dict[str, int] = {}
@@ -230,6 +235,25 @@ class DemonstrationRecorder:
         self._save_metadata(duration, complete=complete)
 
         return self.recording_dir
+
+    def add_event_marker(self) -> None:
+        """Record a timestamped event marker (used in marking mode).
+
+        Captures the reference camera's clock so the marker shares the same
+        time base as the robot frames and camera frame timestamps.
+        """
+        if not self.is_recording:
+            return
+        try:
+            ts_ns = int(self.cameras[0].get_current_timestamp_ns())
+        except Exception:
+            ts_ns = time.time_ns()
+        elapsed = time.monotonic() - self._start_time
+        self._event_markers.append({"t": ts_ns, "elapsed_s": round(elapsed, 3)})
+        print(
+            f"  ✓ Event marker #{len(self._event_markers)} at {elapsed:.2f}s "
+            f"(ts={ts_ns})"
+        )
 
     # ------------------------------------------------------------------
     # Background threads
@@ -372,6 +396,9 @@ class DemonstrationRecorder:
         }
         if rs_offsets:
             meta_dict["realsense_clock_offsets"] = rs_offsets
+
+        if self._event_markers:
+            meta_dict["event_markers"] = self._event_markers
 
         with open(output_file, "w") as f:
             json.dump(meta_dict, f, indent=2)
@@ -587,12 +614,14 @@ def _wait_for_enter_or_quit(
 def _wait_for_verdict(
     robot_controller: RobotController,
     interface: TeleopInterface,
+    marking_mode: bool = False,
 ) -> Optional[str]:
     """After recording stops, wait for the user to mark success or failure.
 
     Inputs accepted:
       - Footpedal middle button → "success"
       - Footpedal right button  → "failure"
+      - Footpedal left button   → no-op (ignored at the verdict prompt)
       - Leader arm top button   → "success"  (non-spacemouse)
       - Leader arm bottom button→ "failure"  (non-spacemouse)
       - Enter key               → "success"
@@ -605,7 +634,11 @@ def _wait_for_verdict(
     print("\n" + "-" * 60)
     print("  Mark this demonstration:")
     lines = []
-    lines += ["    Middle pedal → success", "    Right pedal  → failure"]
+    lines += [
+        "    Middle pedal → success",
+        "    Right pedal  → failure",
+        "    Left pedal   → (no-op)",
+    ]
     if interface.supports_verdict_button:
         lines += ["    Top button    → success", "    Bottom button → failure"]
     lines += ["    Enter → success   f → failure   other key → skip"]
@@ -622,6 +655,11 @@ def _wait_for_verdict(
                 return "success"
             if interface.poll_failure(robot_controller):
                 return "failure"
+            if marking_mode:
+                # Drain any left-pedal trigger events so they are a no-op at
+                # the verdict prompt (instead of auto-starting the next
+                # recording on the next iteration).
+                interface.poll(robot_controller)
             if select.select([sys.stdin], [], [], 0)[0]:
                 ch = sys.stdin.read(1)
                 if ch in ("\r", "\n"):
@@ -681,6 +719,7 @@ def run_recording(
     calibration_file: str = CALIBRATION_FILE,
     arms: str = "bimanual",
     data_dir: str = "data",
+    marking_mode: bool = False,
 ) -> None:
     """Run teleoperation with continuous demonstration recording.
 
@@ -692,6 +731,14 @@ def run_recording(
       Press the leader button to start the next episode, or 'q' to end the session.
     - Incomplete recordings (estop / Ctrl-C) are detected via the ``complete``
       flag in metadata.json and overridden on the next run.
+
+    Args:
+        marking_mode: If True, repurpose the foot pedals during recording for
+            event marking — the middle pedal logs an event timestamp into
+            ``metadata.json``, and the right pedal ends the trajectory (no
+            immediate verdict).  The verdict prompt that follows behaves
+            normally (middle=success, right=failure, left=no-op).  Outside
+            of an active recording the pedals behave as in normal mode.
     """
     print("\n" + "=" * 60)
     print("  DEMONSTRATION RECORDING")
@@ -732,6 +779,12 @@ def run_recording(
 
     # ── optional footpedal (once per session) ────────────────────────────
     interface.open()
+    interface.set_marking_mode(marking_mode)
+    if marking_mode:
+        print(
+            "  Marking mode: during recording the middle pedal logs an event "
+            "marker and the right pedal ends the trajectory.\n"
+        )
 
     # ── one-time camera + robot initialisation ───────────────────────────
     print("Initializing cameras...")
@@ -844,12 +897,22 @@ def run_recording(
                 while True:
                     if robot_controller.session_estop_requested:
                         break
-                    if interface.poll_success(robot_controller):
-                        forced_success = True
-                        break
-                    if interface.poll_failure(robot_controller):
-                        forced_failure = True
-                        break
+                    if marking_mode:
+                        # Marking mode: middle pedal logs an event marker
+                        # without stopping; right pedal ends the trajectory
+                        # without forcing a verdict (the user marks
+                        # success/failure at the verdict prompt that follows).
+                        if interface.poll_event_marker(robot_controller):
+                            recorder.add_event_marker()
+                        if interface.poll_end_trajectory(robot_controller):
+                            break
+                    else:
+                        if interface.poll_success(robot_controller):
+                            forced_success = True
+                            break
+                        if interface.poll_failure(robot_controller):
+                            forced_failure = True
+                            break
                     if needs_stdin:
                         if select.select([sys.stdin], [], [], 0)[0]:
                             ch = sys.stdin.read(1)
@@ -872,7 +935,9 @@ def run_recording(
             elif forced_success:
                 verdict = "success"
             else:
-                verdict = _wait_for_verdict(robot_controller, interface)
+                verdict = _wait_for_verdict(
+                    robot_controller, interface, marking_mode=marking_mode
+                )
 
             # ── stop episode (shuts down robots, keeps cameras open) ──────
             saved_dir = recorder.stop_recording(complete=not estop)

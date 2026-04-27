@@ -90,6 +90,12 @@ class RecordCommand:
     arms: Literal["bimanual", "single"] = "bimanual"
     """Which arms to use: both (bimanual) or left arm only (single)"""
 
+    marking_mode: bool = False
+    """Repurpose foot pedals during recording for event marking:
+    middle pedal logs an event timestamp, right pedal ends the trajectory
+    (no immediate verdict).  After the trajectory ends the verdict prompt
+    behaves normally (middle=success, right=failure, left=no-op)."""
+
 
 _CAN_BITRATE = 1000000
 
@@ -481,6 +487,7 @@ def main():
                 ),
                 arms=command.arms,
                 data_dir=command.data_dir,
+                marking_mode=command.marking_mode,
             )
 
         elif subcommand == "replay":

@@ -61,6 +61,28 @@ class TeleopInterface(ABC):
         """
         self._recording_controller = robot_controller
 
+    def set_marking_mode(self, enabled: bool) -> None:
+        """Enable event-marking pedal semantics for the rest of the session.
+
+        When enabled, AND a recording is active, the middle pedal becomes an
+        event marker (``poll_event_marker``) and the right pedal becomes an
+        end-trajectory trigger (``poll_end_trajectory``) instead of marking
+        success/failure.  Outside of an active recording (verdict prompt and
+        between episodes) the pedals behave as in normal mode.
+        Default: no-op (marking mode unsupported).
+        """
+        self._marking_mode = enabled
+
+    def poll_event_marker(self, robot_controller: "RobotController") -> bool:
+        """Return True if the user pressed the event-marker pedal (middle, in
+        marking mode while recording).  Default: never triggers."""
+        return False
+
+    def poll_end_trajectory(self, robot_controller: "RobotController") -> bool:
+        """Return True if the user pressed the end-trajectory pedal (right, in
+        marking mode while recording).  Default: never triggers."""
+        return False
+
     def poll(self, robot_controller: "RobotController") -> bool:
         """Return True on a trigger event (button press, footpedal left, etc.).
 

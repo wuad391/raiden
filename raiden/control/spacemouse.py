@@ -40,6 +40,9 @@ class SpaceMouseInterface(TeleopInterface):
         self._pedal_trigger = threading.Event()
         self._pedal_success = threading.Event()
         self._pedal_failure = threading.Event()
+        self._pedal_event_marker = threading.Event()
+        self._pedal_end_trajectory = threading.Event()
+        self._marking_mode = False
         self._footpedal = try_open_footpedal()
         if self._footpedal is not None:
 
@@ -51,9 +54,15 @@ class SpaceMouseInterface(TeleopInterface):
                     else:
                         self._pedal_trigger.set()
                 elif code == PEDAL_MIDDLE:
-                    self._pedal_success.set()
+                    if self._marking_mode and self._recording_controller is not None:
+                        self._pedal_event_marker.set()
+                    else:
+                        self._pedal_success.set()
                 elif code == PEDAL_RIGHT:
-                    self._pedal_failure.set()
+                    if self._marking_mode and self._recording_controller is not None:
+                        self._pedal_end_trajectory.set()
+                    else:
+                        self._pedal_failure.set()
 
             self._footpedal.on_press(_cb)
             self._footpedal.start()
@@ -104,6 +113,20 @@ class SpaceMouseInterface(TeleopInterface):
 
     def poll_failure(self, robot_controller) -> bool:
         ev = getattr(self, "_pedal_failure", None)
+        if ev is not None and ev.is_set():
+            ev.clear()
+            return True
+        return False
+
+    def poll_event_marker(self, robot_controller) -> bool:
+        ev = getattr(self, "_pedal_event_marker", None)
+        if ev is not None and ev.is_set():
+            ev.clear()
+            return True
+        return False
+
+    def poll_end_trajectory(self, robot_controller) -> bool:
+        ev = getattr(self, "_pedal_end_trajectory", None)
         if ev is not None and ev.is_set():
             ev.clear()
             return True
