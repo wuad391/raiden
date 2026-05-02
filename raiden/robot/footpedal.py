@@ -134,15 +134,7 @@ class FootPedal:
 # failure (device not connected, permission error, etc.)
 # ---------------------------------------------------------------------------
 
-_YELLOW = "\033[1;33m"
-_RESET = "\033[0m"
-
-
-def _warn(msg: str) -> None:
-    print(f"{_YELLOW}{'!' * 60}{_RESET}")
-    for line in msg.splitlines():
-        print(f"{_YELLOW}  {line}{_RESET}")
-    print(f"{_YELLOW}{'!' * 60}{_RESET}\n")
+from raiden._warn import warn as _warn  # noqa: F401  (re-exported for callers)
 
 
 def try_open_footpedal(device_path: Optional[str] = None) -> Optional[FootPedal]:

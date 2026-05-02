@@ -293,9 +293,10 @@ class RaidenPolicyServer(chiral.PolicyServer):
                     pred = TRIStereoOnnxDepthPredictor(variant=tri_stereo_variant)
                     pred._ensure_loaded()
                 else:
+                    from raiden.depth.tri_stereo import WEIGHTS_HELP
                     raise RuntimeError(
                         f"No TRI Stereo model found for variant '{tri_stereo_variant}'. "
-                        "Run: git lfs pull"
+                        f"{WEIGHTS_HELP}"
                     )
             self._ffs_predictor = pred
 

@@ -187,9 +187,10 @@ def _extract_svo2_synchronized(
                     variant=tri_stereo_variant
                 )
             else:
+                from raiden.depth.tri_stereo import WEIGHTS_HELP
                 raise RuntimeError(
                     f"No TRI Stereo model found for variant '{tri_stereo_variant}'. "
-                    f"Run: git lfs pull"
+                    f"{WEIGHTS_HELP}"
                 )
 
     # Open all cameras.
@@ -885,6 +886,19 @@ def _build_sequence_metadata(
         "control": rec_meta.get("control", "leader"),
     }
 
+    # Preserve subtask annotations recorded by the foot pedal.  Markers,
+    # `audio_full`, and `audio_segments` all carry timestamps on the same
+    # clock as `timestamps.npy` / `robot_data.npz` so downstream training
+    # can align them without re-reading the raw metadata.json.  Audio
+    # filenames are relative to the `audio/` folder copied next to this
+    # metadata.json.
+    if rec_meta.get("event_markers"):
+        meta["event_markers"] = rec_meta["event_markers"]
+    if rec_meta.get("audio_full"):
+        meta["audio_full"] = rec_meta["audio_full"]
+    if rec_meta.get("audio_segments"):
+        meta["audio_segments"] = rec_meta["audio_segments"]
+
     with open(seq_dir / "metadata.json", "w") as f:
         json.dump(meta, f, indent=2)
 
@@ -1203,6 +1217,14 @@ def convert_recording(
     # ── sequence metadata ─────────────────────────────────────────────────
     _build_sequence_metadata(seq_dir, cameras, frame_counts, rec_meta, camera_infos)
     print("  ✓ metadata.json")
+
+    # ── copy audio narration alongside the sequence ──────────────────────
+    src_audio_dir = rec_path / "audio"
+    if src_audio_dir.is_dir() and any(src_audio_dir.iterdir()):
+        dst_audio_dir = seq_dir / "audio"
+        shutil.copytree(src_audio_dir, dst_audio_dir, dirs_exist_ok=True)
+        n_wavs = len(list(dst_audio_dir.glob("*.wav")))
+        print(f"  ✓ audio/ ({n_wavs} segment{'s' if n_wavs != 1 else ''})")
 
     if episode_dir is None:
         # ── dataset-level files ───────────────────────────────────────────

@@ -19,6 +19,7 @@ import json
 import pickle
 import platform
 import random
+import shutil
 import socket
 import sys
 import tarfile
@@ -938,6 +939,9 @@ def run_shardify(
     # ── Phase 1: load all episodes ────────────────────────────────────────
     print(f"Loading {len(eps)} episode(s)...")
     ep_contexts: List[dict] = []
+    # Episode-level subtask annotations propagated into shards/subtask_index.json.
+    # Built here so we don't walk ep_contexts a second time after sharding.
+    subtask_index: Dict[str, dict] = {}
     skipped = 0
     total_frames = 0
     for i, ep_dir in enumerate(eps, 1):
@@ -954,6 +958,9 @@ def run_shardify(
         anchor_frame = frames[0]
         with open(ep_dir / "metadata.json") as _mf:
             _ep_meta = json.load(_mf)
+        markers = _ep_meta.get("event_markers") or []
+        segments = _ep_meta.get("audio_segments") or []
+        audio_full = _ep_meta.get("audio_full")
         ep_contexts.append(
             {
                 "ep_dir": ep_dir,
@@ -967,8 +974,19 @@ def run_shardify(
                 "language_prompt": str(anchor_frame.get("language_prompt", "")),
                 "episode_id": ep_dir.name,
                 "control": _ep_meta.get("control", "leader"),
+                "event_markers": markers,
+                "audio_segments": segments,
+                "audio_full": audio_full,
             }
         )
+        if markers or segments or audio_full:
+            entry: dict = {
+                "event_markers": markers,
+                "audio_segments": segments,
+            }
+            if audio_full:
+                entry["audio_full"] = audio_full
+            subtask_index[ep_dir.name] = entry
         total_frames += len(frames)
         print(f"  [{i}/{len(eps)}] {ep_dir.name}  ({len(frames)} frames)")
     skip_msg = f", {skipped} skipped" if skipped else ""
@@ -1042,6 +1060,35 @@ def run_shardify(
 
     # ── write manifest.jsonl ─────────────────────────────────────────────
     (shard_dir / "manifest.jsonl").write_text("\n".join(writer.manifest_lines()) + "\n")
+
+    # ── propagate subtask annotations + audio narration ──────────────────
+    # `subtask_index.json` lets training pipelines look up event_markers
+    # and audio_segments by sample's `episode_id` without re-reading the
+    # converted episode metadata.  Per-episode audio WAVs are mirrored
+    # under `shards/audio/<episode_id>/` so the shard directory is self-
+    # contained.
+    if subtask_index:
+        n_audio_episodes = 0
+        n_marker_episodes = sum(1 for v in subtask_index.values() if v["event_markers"])
+        audio_root = shard_dir / "audio"
+        for ep_id, entry in subtask_index.items():
+            if not (entry["audio_segments"] or entry.get("audio_full")):
+                continue
+            src_audio = next(
+                (ctx["ep_dir"] / "audio" for ctx in ep_contexts
+                 if ctx["episode_id"] == ep_id),
+                None,
+            )
+            if src_audio is None or not src_audio.is_dir():
+                continue
+            shutil.copytree(src_audio, audio_root / ep_id, dirs_exist_ok=True)
+            n_audio_episodes += 1
+        with open(shard_dir / "subtask_index.json", "w") as f:
+            json.dump(subtask_index, f, indent=2)
+        print(
+            f"  ✓ subtask_index.json ({n_marker_episodes} episode(s) with "
+            f"event_markers, {n_audio_episodes} with audio/)"
+        )
 
     # ── compute and write stats.json ─────────────────────────────────────
     print("\nComputing statistics...")

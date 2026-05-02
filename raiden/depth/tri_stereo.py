@@ -34,6 +34,13 @@ from typing import Optional
 import cv2
 import numpy as np
 
+
+WEIGHTS_HELP = (
+    "Drop your own stereo_c{32,64}.onnx into "
+    "~/.config/raiden/weights/tri_stereo/ — see README "
+    "§'Changes vs. upstream' → 'TRI Stereo bundled weights removed'."
+)
+
 # Search order for model files.
 _SEARCH_DIRS = [
     Path.home() / ".config" / "raiden" / "weights" / "tri_stereo",
@@ -147,7 +154,7 @@ class TRIStereoOnnxDepthPredictor:
 
         if not self._onnx_path.exists():
             raise RuntimeError(
-                f"TRI Stereo ONNX model not found: {self._onnx_path}. Run: git lfs pull"
+                f"TRI Stereo ONNX model not found: {self._onnx_path}. {WEIGHTS_HELP}"
             )
 
         providers = (
