@@ -1,10 +1,12 @@
-"""Downstream propagation of event_markers + audio_segments.
+"""Downstream propagation of event_markers, audio_segments, and audio_full.
 
 These tests pin the contract that:
-  * `_build_sequence_metadata` (called by `rd convert`) carries the two
-    new fields from raw metadata into the converted sequence metadata.
-  * The shardify subtask_index file is shaped {episode_id: {event_markers,
-    audio_segments}} and only mentions episodes that actually have data.
+  * `_build_sequence_metadata` (called by `rd convert`) carries all
+    three fields from raw metadata into the converted sequence metadata.
+  * The shardify subtask_index file is shaped
+    ``{episode_id: {event_markers, audio_segments, audio_full?}}``
+    (``audio_full`` only when present) and only mentions episodes that
+    actually have data (any of: markers, segments, or audio_full).
 
 The full converter / shardify pipelines need the heavy ML stack and
 real recording data, so these tests target the small pure-python
@@ -104,16 +106,25 @@ def test_sequence_metadata_omits_keys_when_raw_has_empty_lists(tmp_path):
 
 def _build_subtask_index(ep_contexts: list) -> dict:
     """Mirror the projection done inside `run_shardify` so we can assert
-    the JSON shape without standing up the full pipeline."""
+    the JSON shape without standing up the full pipeline.
+
+    Includes ``audio_full`` in an entry when the episode carries it,
+    and also indexes audio_full-only episodes (matches the real
+    shardify path).
+    """
     out: dict = {}
     for ctx in ep_contexts:
         markers = ctx.get("event_markers") or []
         segments = ctx.get("audio_segments") or []
-        if markers or segments:
-            out[ctx["episode_id"]] = {
+        audio_full = ctx.get("audio_full")
+        if markers or segments or audio_full:
+            entry: dict = {
                 "event_markers": markers,
                 "audio_segments": segments,
             }
+            if audio_full:
+                entry["audio_full"] = audio_full
+            out[ctx["episode_id"]] = entry
     return out
 
 

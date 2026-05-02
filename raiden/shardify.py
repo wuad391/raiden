@@ -1071,18 +1071,17 @@ def run_shardify(
         n_audio_episodes = 0
         n_marker_episodes = sum(1 for v in subtask_index.values() if v["event_markers"])
         audio_root = shard_dir / "audio"
+        # Build the episode_id → audio source lookup once so the mirror
+        # loop stays O(N) instead of O(N * len(ep_contexts)).
+        ep_dir_by_id = {ctx["episode_id"]: ctx["ep_dir"] for ctx in ep_contexts}
         for ep_id, entry in subtask_index.items():
             if not (entry["audio_segments"] or entry.get("audio_full")):
                 continue
-            src_audio = next(
-                (
-                    ctx["ep_dir"] / "audio"
-                    for ctx in ep_contexts
-                    if ctx["episode_id"] == ep_id
-                ),
-                None,
-            )
-            if src_audio is None or not src_audio.is_dir():
+            ep_dir = ep_dir_by_id.get(ep_id)
+            if ep_dir is None:
+                continue
+            src_audio = ep_dir / "audio"
+            if not src_audio.is_dir():
                 continue
             shutil.copytree(src_audio, audio_root / ep_id, dirs_exist_ok=True)
             n_audio_episodes += 1

@@ -361,8 +361,14 @@ class AudioRecorder:
         last → end-of-episode) plus one ``audio_full.wav`` that is
         sample-identical to the concatenation of those segments.
         Nothing is written if the operator never pressed the pedal.
+
+        We gate only on ``boundaries`` (not ``frames``): a press recorded
+        before the first PyAudio callback delivered a buffer would
+        otherwise drop the boundary entirely, breaking the
+        ``len(audio_segments) == len(event_markers)`` contract.  Empty
+        slices yield valid header-only WAVs with ``duration_s = 0.0``.
         """
-        if not frames or not boundaries:
+        if not boundaries:
             return
 
         audio_dir = episode_dir / "audio"
