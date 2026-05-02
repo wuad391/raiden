@@ -282,7 +282,7 @@ class DemonstrationRecorder:
         ``_capture_clock`` for details."""
         return _capture_clock(self.cameras)
 
-    def add_event_marker(self) -> None:
+    def add_event_marker(self) -> "Optional[tuple[int, str]]":
         """Record a timestamped subtask-boundary marker.
 
         Captures the reference camera's clock so the marker shares the same
@@ -290,9 +290,13 @@ class DemonstrationRecorder:
         camera-clock read fails (e.g. transient SDK error), falls back to
         ``time.time_ns()`` and records ``clock="wallclock_fallback"`` so
         downstream consumers can detect the inconsistency.
+
+        Returns the captured ``(t_ns, clock)`` so callers can fan it out
+        to other consumers (e.g. ``AudioRecorder.mark_boundary``) without
+        a second clock read.  Returns ``None`` if not recording.
         """
         if not self.is_recording:
-            return
+            return None
         clock = _CLOCK_CAMERA
         try:
             ts_ns = int(self.cameras[0].get_current_timestamp_ns())
@@ -312,6 +316,7 @@ class DemonstrationRecorder:
             f"  ✓ Event marker #{len(self._event_markers)} at {elapsed:.2f}s "
             f"(ts={ts_ns}, clock={clock})"
         )
+        return ts_ns, clock
 
     # ------------------------------------------------------------------
     # Background threads
@@ -837,15 +842,12 @@ def run_recording(
     # ── optional audio recorder (once per session) ───────────────────────
     audio_recorder: Optional[AudioRecorder] = None
     if record_audio:
-        audio_recorder = AudioRecorder(
-            poll_press=lambda: interface.poll_subtask_audio(None),
-            capture_clock=lambda: _capture_clock(cameras),
-            device_index=audio_device_index,
-        )
+        audio_recorder = AudioRecorder(device_index=audio_device_index)
         audio_recorder.start_session()
         print(
-            "  Audio recording: first pedal press starts the stream; later "
-            "presses mark segment boundaries aligned with event markers.\n"
+            "  Audio recording: stream opens at episode start; pre-first-press "
+            "audio is discarded as warm-up noise.  From first press onwards, "
+            "audio_full.wav + per-press segment WAVs land in <recording_dir>/audio/.\n"
         )
 
     # Signal handler updated each episode to point at the current controller.
@@ -949,8 +951,14 @@ def run_recording(
                     if robot_controller.session_estop_requested:
                         break
                     # Each pedal press during recording is a subtask boundary.
+                    # Capture the timestamp ONCE and fan it out so
+                    # event_markers[i].t and audio_segments[i].boundary_t_ns
+                    # are bit-identical (no second clock read on the audio thread).
                     if interface.poll_subtask(robot_controller):
-                        recorder.add_event_marker()
+                        captured = recorder.add_event_marker()
+                        if captured is not None and audio_recorder is not None:
+                            ts_ns, clock = captured
+                            audio_recorder.mark_boundary(ts_ns, clock)
                     if needs_stdin:
                         if select.select([sys.stdin], [], [], 0)[0]:
                             ch = sys.stdin.read(1)
@@ -967,17 +975,21 @@ def run_recording(
             interface.set_active_recording(None)
             estop = robot_controller.session_estop_requested
 
-            # ── verdict phase (arms still active, before shutdown) ────────
-            if estop:
-                verdict: Optional[str] = "failure"
-            else:
-                verdict = _wait_for_verdict()
-
-            # ── stop episode (shuts down robots, keeps cameras open) ──────
+            # ── stop episode FIRST so the verdict-prompt wait doesn't
+            #    pollute robot frames / camera video / audio with
+            #    operator idle time (verdict is keyboard-only and may
+            #    take up to 30 s).  Robots return home, cameras and
+            #    audio finalise, metadata is written.
             saved_dir = recorder.stop_recording(complete=not estop)
             recorder = None
             _active_ctrl[0] = None
             robot_controller = None  # shut down inside stop_recording
+
+            # ── verdict phase (after recording is saved) ──────────────────
+            if estop:
+                verdict: Optional[str] = "failure"
+            else:
+                verdict = _wait_for_verdict()
 
             _copy_calibration(saved_dir)
 

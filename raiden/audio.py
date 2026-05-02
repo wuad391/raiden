@@ -18,9 +18,10 @@ from __future__ import annotations
 import json
 import threading
 import time
+from collections import deque
 from datetime import datetime
 from pathlib import Path
-from typing import Callable, Dict, List, Optional, Tuple
+from typing import Callable, Deque, Dict, List, Optional, Tuple
 
 # PyAudio is an optional extra. Keep the import soft so a non-audio install
 # of raiden imports `raiden.audio` without crashing — `AudioRecorder.start_session`
@@ -49,40 +50,37 @@ SAMPLE_WIDTH = 2  # bytes per sample for int16
 CHUNK = 1024
 
 
-# Sentinel that ``capture_clock`` callers expect: returns
-# ``(ts_ns, clock_label)``.
-CaptureClock = Callable[[], Tuple[int, str]]
-PollPress = Callable[[], bool]
-
-
 class AudioRecorder:
-    """Continuous microphone recorder driven by audio-pedal presses.
+    """Continuous microphone recorder driven by ``mark_boundary`` calls.
 
     One instance per session. Episode-scoped state (segments, frames,
     recording_dir) is rebuilt at the start of each episode.
 
+    Boundaries are pushed in by the recorder thread via ``mark_boundary``
+    (which carries the same ``(t_ns, clock)`` value used for the matching
+    ``event_markers`` entry).  This guarantees that ``event_markers[i].t``
+    and ``audio_segments[i].boundary_t_ns`` are bit-identical — there is
+    no second clock read on the audio thread.
+
     Lifecycle::
 
-        ar = AudioRecorder(poll_press=lambda: interface.poll_subtask_audio(None),
-                           capture_clock=recorder._capture_clock)
-        ar.start_session()           # spins the daemon thread
-        ar.start_episode(rec_dir)    # at the top of each episode
-        ...                          # operator presses pedal during episode
-        ar.stop_episode()            # signals end of episode
-        ar.wait_until_idle()         # block until WAVs are flushed
-        audio = ar.drain()           # {"audio_full": ..., "audio_segments": [...]}
-        ar.stop_session()            # at session end
+        ar = AudioRecorder()
+        ar.start_session()                  # spins the daemon thread
+        ar.start_episode(rec_dir)           # at the top of each episode
+        ar.mark_boundary(ts_ns, clock)      # called by the recorder loop on each press
+        ar.stop_episode()                   # signals end of episode
+        ar.wait_until_idle()                # block until WAVs are flushed
+        audio = ar.drain()                  # {"audio_full": ..., "audio_segments": [...]}
+        ar.stop_session()                   # at session end
 
     The recorder is fail-soft: if PyAudio is missing or the input device
     can't be opened, ``start_session`` prints a yellow warning and the
-    recorder becomes a no-op (presses are ignored, no WAVs written, the
-    rest of recording continues). Callers don't need to special-case this.
+    recorder becomes a no-op (boundaries are ignored, no WAVs written,
+    the rest of recording continues). Callers don't need to special-case
+    this.
     """
 
-    def __init__(self, poll_press: PollPress, capture_clock: CaptureClock,
-                 device_index: Optional[int] = None) -> None:
-        self._poll_press = poll_press
-        self._capture_clock = capture_clock
+    def __init__(self, device_index: Optional[int] = None) -> None:
         self._device_index = device_index
 
         self._pa: Optional["pyaudio.PyAudio"] = None
@@ -99,6 +97,10 @@ class AudioRecorder:
         self._idle.set()
         self._segments: List[Dict] = []
         self._full: Optional[Dict] = None
+        # Boundaries pushed by the recorder thread; drained by the audio
+        # daemon thread.  deque is thread-safe for append/popleft per the
+        # CPython docs.
+        self._pending_boundaries: Deque[Tuple[int, str]] = deque()
 
     # ------------------------------------------------------------------
     # Session lifecycle
@@ -159,16 +161,28 @@ class AudioRecorder:
     def start_episode(self, recording_dir: Path) -> None:
         """Mark a new episode active so the daemon thread opens the stream.
 
-        Audio capture begins immediately — pressing the pedal merely marks
-        a segment boundary in the running stream.
+        Audio capture begins immediately — the recorder calls
+        ``mark_boundary`` to push each subtask-boundary timestamp.
         """
         if not self._enabled:
             return
         self._episode_dir = Path(recording_dir)
         self._segments = []
         self._full = None
+        self._pending_boundaries.clear()
         self._idle.set()
         self._episode_running.set()
+
+    def mark_boundary(self, t_ns: int, clock: str) -> None:
+        """Push a subtask-boundary timestamp into the audio stream.
+
+        Called by the recorder thread on each pedal press, with the same
+        ``(t_ns, clock)`` value it used for the matching ``event_markers``
+        entry.  No-op when the recorder is disabled or no episode is active.
+        """
+        if not self._enabled or not self._episode_running.is_set():
+            return
+        self._pending_boundaries.append((int(t_ns), str(clock)))
 
     def stop_episode(self) -> None:
         """Signal end-of-episode; the daemon will close any open stream and save."""
@@ -254,9 +268,10 @@ class AudioRecorder:
         ``stop_episode`` clears ``_episode_running``, but **only the audio
         from the first press onwards is written to disk** — the
         pre-first-press period is treated as warm-up noise and discarded.
-        Each subsequent press marks a segment boundary in the running
-        stream, producing one WAV per inter-press interval plus a single
-        ``audio_full.wav`` covering first-press → end-of-episode.
+        Boundaries are drained from ``_pending_boundaries`` (pushed by the
+        recorder thread via ``mark_boundary``), producing one WAV per
+        inter-press interval plus a single ``audio_full.wav`` covering
+        first-press → end-of-episode.
         """
         episode_dir = self._episode_dir
         if episode_dir is None:
@@ -282,7 +297,13 @@ class AudioRecorder:
                 stream_callback=_callback,
             )
         except (OSError, IOError) as e:
-            print(f"  ! AudioRecorder.open() failed ({e}); skipping episode")
+            # Don't loop: clearing _episode_running stops _run from
+            # immediately re-entering this function (which would spam
+            # logs and re-attempt opens for the rest of the episode on
+            # a permanently-failed device).  The next start_episode()
+            # gives the daemon a fresh attempt.
+            print(f"  ! AudioRecorder.open() failed ({e}); audio off for this episode")
+            self._episode_running.clear()
             return
 
         self._idle.clear()
@@ -290,8 +311,13 @@ class AudioRecorder:
 
         try:
             while self._session_running and self._episode_running.is_set():
-                if self._poll_press():
-                    ts_ns, clock = self._capture_clock()
+                # Drain every boundary the recorder pushed since the last
+                # tick.  The frame index is "current end of buffer at the
+                # moment we observed the boundary"; (ts_ns, clock) come
+                # straight from the recorder so they bit-match the
+                # corresponding event_markers entry.
+                while self._pending_boundaries:
+                    ts_ns, clock = self._pending_boundaries.popleft()
                     boundaries.append((len(frames), ts_ns, clock, time.time()))
                     print(
                         f"  ✓ Audio segment boundary #{len(boundaries)} "
@@ -306,6 +332,11 @@ class AudioRecorder:
                 # PyAudio's stop/close can raise on already-closed streams
                 # or device disconnect.  Cleanup-path only — log and move on.
                 print("  ! AudioRecorder stream cleanup raised; continuing")
+            # Drain any boundary pushed in the gap between the last poll
+            # and stop_episode() so the final segment isn't lost.
+            while self._pending_boundaries:
+                ts_ns, clock = self._pending_boundaries.popleft()
+                boundaries.append((len(frames), ts_ns, clock, time.time()))
 
         try:
             self._save_audio(episode_dir, frames, boundaries)

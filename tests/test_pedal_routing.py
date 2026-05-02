@@ -1,5 +1,5 @@
-"""Single-pedal routing — every press during an active recording latches both
-the subtask and the subtask-audio Events. Pre-recording presses are no-ops.
+"""Single-pedal routing — every press during an active recording latches
+the subtask Event. Pre-recording presses are no-ops.
 
 Parametrised over both production interfaces (SpaceMouse, YAM).
 """
@@ -24,29 +24,27 @@ def test_pre_recording_pedal_press_is_a_no_op(
     """
     fake_pedal.press(pedal_codes[which])
     assert any_interface.poll_subtask(robot_controller) is False
-    assert any_interface.poll_subtask_audio(robot_controller) is False
 
 
 # ---------------------------------------------------------------------------
-# During recording — every pedal code latches both Events
+# During recording — every pedal code latches the subtask Event
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize("which", ["left", "middle", "right"])
-def test_recording_any_pedal_latches_both_subtask_events(
+def test_recording_any_pedal_latches_subtask(
     any_interface, fake_pedal, pedal_codes, robot_controller, which
 ):
-    """Any pedal press during an active recording sets BOTH the recorder
-    latch (poll_subtask) and the audio latch (poll_subtask_audio).
+    """Any pedal press during an active recording sets ``_pedal_subtask``.
 
-    Both must latch independently — they are consumed by separate
-    threads (the recorder loop drains poll_subtask; AudioRecorder
-    drains poll_subtask_audio).
+    The recorder thread polls this latch, captures the camera clock
+    once, and fans the timestamp out to ``add_event_marker`` and
+    ``AudioRecorder.mark_boundary`` so both consumers see bit-identical
+    timestamps.
     """
     any_interface.set_active_recording(robot_controller)
     fake_pedal.press(pedal_codes[which])
     assert any_interface.poll_subtask(robot_controller) is True
-    assert any_interface.poll_subtask_audio(robot_controller) is True
 
 
 def test_subtask_latch_is_clear_on_read(

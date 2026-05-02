@@ -6,19 +6,18 @@ Pins:
   - With a fake PyAudio injected, the daemon thread opens the stream at
     ``start_episode`` (not on first press), captures continuously,
     discards pre-first-press warm-up noise, writes ``audio_full.wav``
-    spanning first-press → end-of-episode, and ALSO writes one WAV per
+    spanning first-press → end-of-episode, and writes one WAV per
     pedal-press boundary.
-  - ``audio_full.start_t_ns`` and each segment's ``boundary_t_ns`` come
-    from the injected ``capture_clock`` and propagate the ``clock``
-    discriminator into both the sidecars and the drained dict.
+  - Boundaries are pushed via ``mark_boundary(ts_ns, clock)`` from the
+    recorder thread (not polled / not separately timestamped on the
+    audio thread), so each segment's boundary timestamp matches the
+    matching ``event_markers`` entry bit-for-bit.
 """
 
 from __future__ import annotations
 
 import json
-import threading
 import time
-from typing import List, Tuple
 from unittest.mock import MagicMock
 
 import pytest
@@ -54,7 +53,7 @@ class FakePyAudio:
     """Stand-in for `pyaudio.PyAudio`. Returns a single FakeStream per open()."""
 
     def __init__(self) -> None:
-        self.streams: List[FakeStream] = []
+        self.streams: list = []
         self.terminated = False
 
     def get_default_input_device_info(self) -> dict:
@@ -95,43 +94,6 @@ def fake_pyaudio(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-class _PressQueue:
-    """Drives `poll_press` from the test thread. Each emit() returns True
-    on the next call only. Thread-safe."""
-
-    def __init__(self) -> None:
-        self._pending = 0
-        self._lock = threading.Lock()
-
-    def emit(self) -> None:
-        with self._lock:
-            self._pending += 1
-
-    def __call__(self) -> bool:
-        with self._lock:
-            if self._pending > 0:
-                self._pending -= 1
-                return True
-            return False
-
-
-class _ClockSequence:
-    """Returns successive ts_ns values so each capture has a distinct clock."""
-
-    def __init__(self, start_ns: int = 1_700_000_000_000_000_000,
-                 step_ns: int = 1_000_000) -> None:
-        self._t = start_ns
-        self._step = step_ns
-        self._lock = threading.Lock()
-        self.label = _CLOCK_CAMERA
-
-    def __call__(self) -> Tuple[int, str]:
-        with self._lock:
-            t = self._t
-            self._t += self._step
-            return t, self.label
-
-
 def _wait_for(predicate, timeout: float, poll: float = 0.05) -> None:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
@@ -150,11 +112,11 @@ def test_recorder_disabled_when_pyaudio_unavailable(monkeypatch, tmp_path,
                                                     capsys):
     """Without PyAudio the recorder is a no-op; recording continues."""
     monkeypatch.setattr(audio_mod, "_PYAUDIO_AVAILABLE", False, raising=False)
-    rec = AudioRecorder(poll_press=lambda: False,
-                        capture_clock=lambda: (0, _CLOCK_CAMERA))
+    rec = AudioRecorder()
     rec.start_session()
     assert rec.enabled is False
     rec.start_episode(tmp_path)
+    rec.mark_boundary(1_700_000_000, _CLOCK_CAMERA)  # ignored
     rec.stop_episode()
     assert rec.wait_until_idle(timeout=0.1) is True
     drained = rec.drain()
@@ -185,12 +147,56 @@ def test_recorder_disabled_when_no_input_device(monkeypatch, tmp_path, capsys):
     monkeypatch.setattr(audio_mod, "_PYAUDIO_PA_CONTINUE", fake_mod.paContinue,
                         raising=False)
 
-    rec = AudioRecorder(poll_press=lambda: False,
-                        capture_clock=lambda: (0, _CLOCK_CAMERA))
+    rec = AudioRecorder()
     rec.start_session()
     assert rec.enabled is False
     out = capsys.readouterr().out
     assert "no microphone available" in out.lower()
+
+
+# ---------------------------------------------------------------------------
+# Stream-open failure does not spin
+# ---------------------------------------------------------------------------
+
+
+def test_open_failure_clears_episode_running(monkeypatch, tmp_path, capsys):
+    """If pa.open() raises mid-session, _episode_running is cleared so the
+    daemon doesn't immediately re-enter and spam logs."""
+    fake_pa_mod = MagicMock()
+    fake_pa_mod.paInt16 = 8
+    fake_pa_mod.paContinue = 0
+
+    class _OpenFailsPyAudio:
+        def get_default_input_device_info(self):
+            return {"name": "fake", "index": 0}
+
+        def open(self, **_kw):
+            raise OSError("device busy")
+
+        def terminate(self):
+            pass
+
+    fake_pa_mod.PyAudio = _OpenFailsPyAudio
+    monkeypatch.setattr(audio_mod, "pyaudio", fake_pa_mod, raising=False)
+    monkeypatch.setattr(audio_mod, "_PYAUDIO_AVAILABLE", True, raising=False)
+    monkeypatch.setattr(audio_mod, "_PYAUDIO_FORMAT_INT16", fake_pa_mod.paInt16,
+                        raising=False)
+    monkeypatch.setattr(audio_mod, "_PYAUDIO_PA_CONTINUE", fake_pa_mod.paContinue,
+                        raising=False)
+
+    rec = AudioRecorder()
+    rec.start_session()
+    assert rec.enabled is True
+    rec.start_episode(tmp_path)
+    # Give the daemon time to attempt + fail the open.
+    time.sleep(0.3)
+    # _episode_running should have been cleared by the failure path so
+    # the daemon went back to sleep instead of re-entering.
+    assert not rec._episode_running.is_set()
+    rec.stop_session()
+    out = capsys.readouterr().out
+    # Exactly one failure log per failed open.
+    assert out.count("AudioRecorder.open() failed") == 1
 
 
 # ---------------------------------------------------------------------------
@@ -205,8 +211,7 @@ def test_no_press_writes_nothing(fake_pyaudio, tmp_path):
     first press there's no anchor, so neither segments nor audio_full
     land on disk.
     """
-    rec = AudioRecorder(poll_press=lambda: False,
-                        capture_clock=lambda: (1_700_000_000, _CLOCK_CAMERA))
+    rec = AudioRecorder()
     rec.start_session()
     rec.start_episode(tmp_path)
     _wait_for(lambda: len(fake_pyaudio.streams) == 1, timeout=2.0)
@@ -221,11 +226,11 @@ def test_no_press_writes_nothing(fake_pyaudio, tmp_path):
 
 
 def test_two_presses_yield_audio_full_plus_two_segments(fake_pyaudio, tmp_path):
-    """Two presses produce two segments AND audio_full.wav anchored at
-    the first press.  Pre-first-press warm-up noise is discarded."""
-    presses = _PressQueue()
-    clock = _ClockSequence()
-    rec = AudioRecorder(poll_press=presses, capture_clock=clock)
+    """Two mark_boundary calls produce two segments AND audio_full.wav
+    anchored at the first press.  Pre-first-press warm-up noise is
+    discarded.  Boundary timestamps come from mark_boundary verbatim."""
+    ts0, ts1 = 1_700_000_000_000_000_000, 1_700_000_000_000_001_000
+    rec = AudioRecorder()
     rec.start_session()
     rec.start_episode(tmp_path)
     _wait_for(lambda: len(fake_pyaudio.streams) == 1, timeout=2.0)
@@ -234,12 +239,12 @@ def test_two_presses_yield_audio_full_plus_two_segments(fake_pyaudio, tmp_path):
     # Pre-first-press warm-up noise — must be discarded, not written.
     stream.push(b"\x01\x00" * 1024)
 
-    presses.emit()
+    rec.mark_boundary(ts0, _CLOCK_CAMERA)
     time.sleep(0.2)
     stream.push(b"\x02\x00" * 1024)
     stream.push(b"\x03\x00" * 1024)
 
-    presses.emit()
+    rec.mark_boundary(ts1, _CLOCK_CAMERA)
     time.sleep(0.2)
     stream.push(b"\x04\x00" * 1024)
     stream.push(b"\x05\x00" * 1024)
@@ -274,32 +279,28 @@ def test_two_presses_yield_audio_full_plus_two_segments(fake_pyaudio, tmp_path):
     drained = rec.drain()
     assert drained["audio_full"] is not None
     assert len(drained["audio_segments"]) == 2
-    assert all(s["clock"] == _CLOCK_CAMERA for s in drained["audio_segments"])
 
     boundaries = [s["boundary_t_ns"] for s in drained["audio_segments"]]
-    assert boundaries == sorted(boundaries) and len(set(boundaries)) == len(boundaries)
-    # audio_full anchors AT the first press (warm-up discarded).
-    assert drained["audio_full"]["start_t_ns"] == boundaries[0]
+    # Boundary timestamps are EXACTLY what mark_boundary received — no
+    # second clock read on the audio thread.
+    assert boundaries == [ts0, ts1]
+    # audio_full anchors at the first press (warm-up discarded).
+    assert drained["audio_full"]["start_t_ns"] == ts0
     # audio_full duration ≈ sum of segment durations (sample-aligned concat).
-    # Both are round(_, 3) of float seconds, so allow ~2 ms of rounding slack.
     seg_total = sum(s["duration_s"] for s in drained["audio_segments"])
     assert abs(drained["audio_full"]["duration_s"] - seg_total) < 0.01
     rec.stop_session()
 
 
 def test_segment_clock_label_propagated_on_fallback(fake_pyaudio, tmp_path):
-    """When capture_clock returns wallclock_fallback, both the audio_full
-    sidecar and per-segment sidecars surface that label."""
-    presses = _PressQueue()
-    fallback_clock = _ClockSequence()
-    fallback_clock.label = _CLOCK_FALLBACK
-
-    rec = AudioRecorder(poll_press=presses, capture_clock=fallback_clock)
+    """When mark_boundary is called with wallclock_fallback, both the
+    audio_full sidecar and per-segment sidecars surface that label."""
+    rec = AudioRecorder()
     rec.start_session()
     rec.start_episode(tmp_path)
     _wait_for(lambda: len(fake_pyaudio.streams) == 1, timeout=2.0)
     fake_pyaudio.streams[0].push(b"\x00" * 2048)
-    presses.emit()
+    rec.mark_boundary(1_700_000_000, _CLOCK_FALLBACK)
     time.sleep(0.2)
     fake_pyaudio.streams[0].push(b"\x00" * 2048)
     rec.stop_episode()
@@ -314,14 +315,12 @@ def test_segment_clock_label_propagated_on_fallback(fake_pyaudio, tmp_path):
 
 def test_drain_clears_after_read(fake_pyaudio, tmp_path):
     """Two consecutive drains: second has audio_full=None and empty segments."""
-    presses = _PressQueue()
-    rec = AudioRecorder(poll_press=presses,
-                        capture_clock=lambda: (0, _CLOCK_CAMERA))
+    rec = AudioRecorder()
     rec.start_session()
     rec.start_episode(tmp_path)
     _wait_for(lambda: len(fake_pyaudio.streams) == 1, timeout=2.0)
     fake_pyaudio.streams[0].push(b"\x00" * 2048)
-    presses.emit()
+    rec.mark_boundary(1_700_000_000, _CLOCK_CAMERA)
     time.sleep(0.2)
     fake_pyaudio.streams[0].push(b"\x00" * 2048)
     rec.stop_episode()
@@ -335,9 +334,18 @@ def test_drain_clears_after_read(fake_pyaudio, tmp_path):
     rec.stop_session()
 
 
+def test_mark_boundary_ignored_outside_episode(fake_pyaudio, tmp_path):
+    """mark_boundary called when no episode is active is a silent no-op."""
+    rec = AudioRecorder()
+    rec.start_session()
+    # No start_episode → mark_boundary should be ignored.
+    rec.mark_boundary(1_700_000_000, _CLOCK_CAMERA)
+    assert len(rec._pending_boundaries) == 0
+    rec.stop_session()
+
+
 def test_stop_session_terminates_pyaudio(fake_pyaudio, tmp_path):
-    rec = AudioRecorder(poll_press=lambda: False,
-                        capture_clock=lambda: (0, _CLOCK_CAMERA))
+    rec = AudioRecorder()
     rec.start_session()
     rec.stop_session()
     assert fake_pyaudio.terminated is True

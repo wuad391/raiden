@@ -64,16 +64,16 @@ class TeleopInterface(ABC):
             self._footpedal = None
 
     def _open_footpedal_for_subtask_latches(self) -> None:
-        """Initialise the two subtask Events and bind the pedal callback.
+        """Initialise the subtask Event and bind the pedal callback.
 
-        Two ``threading.Event``s are set on each press so the recorder
-        thread and the AudioRecorder thread can each clear-on-read
-        without coordinating.  The callback is gated on
+        A single ``threading.Event`` is set on each press; the recorder
+        thread polls it, captures the camera clock once, and fans the
+        timestamp out to ``add_event_marker`` and (when audio is enabled)
+        to ``AudioRecorder.mark_boundary``.  The callback is gated on
         ``_recording_controller is not None`` so presses outside an
         active recording are ignored (no soft-pause, no start/stop).
         """
         self._pedal_subtask = threading.Event()
-        self._pedal_subtask_audio = threading.Event()
         # Initialised before the footpedal thread is started so the
         # callback can never race a missing attribute on the first press.
         self._recording_controller = None
@@ -84,7 +84,6 @@ class TeleopInterface(ABC):
         def _cb(_code: int) -> None:
             if self._recording_controller is not None:
                 self._pedal_subtask.set()
-                self._pedal_subtask_audio.set()
 
         self._footpedal.on_press(_cb)
         self._footpedal.start()
@@ -103,24 +102,14 @@ class TeleopInterface(ABC):
         """Return True if the operator pressed the subtask-boundary pedal
         during an active recording.
 
-        Consumed by the recorder to log an event marker.  Default
+        Consumed by the recorder to capture a timestamp once (passed to
+        both ``add_event_marker`` and ``AudioRecorder.mark_boundary`` so
+        the two consumers see bit-identical timestamps).  Default
         implementation drains ``_pedal_subtask`` (initialised in
         ``open()``).
         """
         if self._pedal_subtask.is_set():
             self._pedal_subtask.clear()
-            return True
-        return False
-
-    def poll_subtask_audio(self, robot_controller: "RobotController") -> bool:
-        """Sister latch consumed by ``raiden.audio.AudioRecorder``.
-
-        Set by the same pedal press as ``poll_subtask`` so the recorder
-        and the audio thread can drain independently (each
-        ``threading.Event`` is single-consumer, clear-on-read).
-        """
-        if self._pedal_subtask_audio.is_set():
-            self._pedal_subtask_audio.clear()
             return True
         return False
 
@@ -139,7 +128,6 @@ class TeleopInterface(ABC):
         """
         self.poll(robot_controller)
         self.poll_subtask(robot_controller)
-        self.poll_subtask_audio(robot_controller)
 
     @property
     def uses_leaders(self) -> bool:

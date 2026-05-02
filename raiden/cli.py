@@ -92,11 +92,13 @@ class RecordCommand:
 
     record_audio: bool = False
     """Record continuous microphone audio in parallel with the trajectory.
-    First foot-pedal press starts the stream; later presses mark segment
-    boundaries aligned with `event_markers`. Per-segment WAVs land under
-    `<recording_dir>/audio/`; sidecars and an `audio_segments` list are
-    written into `metadata.json`. PyAudio must be installed
-    (`uv sync --extra audio`)."""
+    The mic stream opens at episode start; the period before the first
+    foot-pedal press is treated as warm-up noise and discarded. From the
+    first press onwards, two WAV shapes land under `<recording_dir>/audio/`:
+    `audio_full.wav` (continuous, first-press → end-of-episode) plus one
+    `audio_<i>_HHMMSS.wav` per inter-press interval (sample-aligned slices
+    of `audio_full`). `metadata.json` gains `audio_full` and
+    `audio_segments`. PyAudio must be installed (`uv sync --extra audio`)."""
 
     audio_device_index: Optional[int] = None
     """Optional PyAudio input device index. Default: system default mic."""
