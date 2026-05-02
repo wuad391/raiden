@@ -55,6 +55,31 @@ sudo apt install portaudio19-dev           # only on fresh Ubuntu, if PyAudio fa
 
 `rd <command> --help` for full options.
 
+## Recording workflow
+
+Per-episode operator script under this fork:
+
+```
+1. Press leader-arm button (or Enter, in spacemouse mode) → recording starts.
+2. Press the foot pedal at each subtask boundary while performing the task.
+3. Press leader-arm button (or Enter) again → recording stops.
+4. Verdict prompt appears: press Enter (success) or f (failure).
+```
+
+Verdict keys:
+
+| Key | Result | Stored as |
+|---|---|---|
+| `Enter` | success | `status: "success"` |
+| `f` / `F` | failure | `status: "failure"` |
+| any other key | skip | `status: "pending"` |
+| 30 s timeout | skip | `status: "pending"` |
+| Ctrl-C / e-stop during episode | forced failure | `status: "failure"` |
+
+The verdict is written into the SQLite metadata DB. Only `status: "success"`
+demos pass through `rd convert` into the trained dataset. To relabel later,
+use `rd console` (terminal UI).
+
 ## Fork changes
 
 Tracked from upstream merge base `2353b10` ("Fixed a minor bug in IK").
