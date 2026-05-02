@@ -358,6 +358,34 @@ def test_mark_boundary_ignored_outside_episode(fake_pyaudio, tmp_path):
     rec.stop_session()
 
 
+def test_press_then_immediate_stop_still_yields_a_segment(fake_pyaudio, tmp_path):
+    """Operator presses pedal then stops the episode before any
+    post-boundary frame lands.  The contract
+    ``len(audio_segments) == len(event_markers)`` must hold, so we emit
+    a header-only WAV with duration_s=0 rather than skip the segment.
+    """
+    rec = AudioRecorder()
+    rec.start_session()
+    rec.start_episode(tmp_path)
+    _wait_for(lambda: len(fake_pyaudio.streams) == 1, timeout=2.0)
+    fake_pyaudio.streams[0].push(b"\x01\x00" * 1024)  # one buffer of warm-up
+
+    # Press pedal — but no further frames pushed before stop_episode.
+    rec.mark_boundary(1_700_000_000, _CLOCK_CAMERA)
+    time.sleep(0.2)  # let the daemon enqueue the boundary
+    rec.stop_episode()
+    assert rec.wait_until_idle(timeout=3.0) is True
+
+    drained = rec.drain()
+    # Count invariant: one press → one segment, even when its slice is empty.
+    assert len(drained["audio_segments"]) == 1
+    assert drained["audio_segments"][0]["duration_s"] == 0.0
+    # audio_full also exists (anchored at the press, zero-length).
+    assert drained["audio_full"] is not None
+    assert drained["audio_full"]["start_t_ns"] == 1_700_000_000
+    rec.stop_session()
+
+
 def test_stop_session_terminates_pyaudio(fake_pyaudio, tmp_path):
     rec = AudioRecorder()
     rec.start_session()

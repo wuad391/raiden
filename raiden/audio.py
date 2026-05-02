@@ -380,9 +380,14 @@ class AudioRecorder:
             start_idx, start_ts_ns, start_clock, start_wall = boundaries_with_end[i]
             end_idx, _, _, end_wall_i = boundaries_with_end[i + 1]
             seg_frames = frames[start_idx:end_idx]
-            if not seg_frames:
-                continue
 
+            # Always emit one segment per pedal press, even when empty.
+            # Skipping would break the contract that
+            # ``len(audio_segments) == len(event_markers)`` (e.g. operator
+            # presses the pedal then immediately stops the episode before
+            # any post-boundary frame lands).  Empty-segment WAVs are
+            # valid (header-only) and explicitly carry duration_s = 0.0
+            # so downstream consumers can skip them if desired.
             wav_filename = f"audio_{i}_{timestamp_str}.wav"
             duration = _save_wav(audio_dir / wav_filename, seg_frames)
             sidecar = {
