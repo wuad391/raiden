@@ -49,7 +49,9 @@ def _install_keyboard(monkeypatch: pytest.MonkeyPatch, chars: list[str]) -> None
     monkeypatch.setattr(
         rec_mod.select,
         "select",
-        lambda r, w, x, t: ([fake_stdin], [], []) if fake_stdin._queue else ([], [], []),
+        lambda r, w, x, t: ([fake_stdin], [], [])
+        if fake_stdin._queue
+        else ([], [], []),
     )
 
 

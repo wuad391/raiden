@@ -34,9 +34,12 @@ from raiden.recorder import (
 class FakeCamera:
     """Minimal Camera stand-in for `add_event_marker`'s clock read."""
 
-    def __init__(self, ts_ns: Optional[int] = None,
-                 raises: Optional[BaseException] = None,
-                 name: str = "scene_camera"):
+    def __init__(
+        self,
+        ts_ns: Optional[int] = None,
+        raises: Optional[BaseException] = None,
+        name: str = "scene_camera",
+    ):
         self.name = name
         self._ts_ns = ts_ns
         self._raises = raises
@@ -48,8 +51,9 @@ class FakeCamera:
         return self._ts_ns
 
 
-def _make_recorder(camera: FakeCamera, recording_dir: Path,
-                   *, recording: bool = True) -> DemonstrationRecorder:
+def _make_recorder(
+    camera: FakeCamera, recording_dir: Path, *, recording: bool = True
+) -> DemonstrationRecorder:
     """Build a DemonstrationRecorder bypassing `__init__`'s heavy deps."""
     rec: DemonstrationRecorder = DemonstrationRecorder.__new__(DemonstrationRecorder)
     rec.cameras = [camera]
@@ -89,7 +93,9 @@ def test_add_event_marker_normal_path_uses_camera_clock(tmp_path):
     assert isinstance(marker["elapsed_s"], float)
 
 
-@pytest.mark.parametrize("exc", [RuntimeError("zed sdk"), OSError("io"), ValueError("nan")])
+@pytest.mark.parametrize(
+    "exc", [RuntimeError("zed sdk"), OSError("io"), ValueError("nan")]
+)
 def test_add_event_marker_falls_back_on_narrow_excs(tmp_path, exc, capsys):
     cam = FakeCamera(raises=exc)
     rec = _make_recorder(cam, tmp_path)

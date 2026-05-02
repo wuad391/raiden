@@ -7,7 +7,6 @@ load in a thin venv without raiden's full ML/robot stack.
 from __future__ import annotations
 
 import sys
-import threading
 import types
 from typing import Callable, Dict, List, Optional
 from unittest.mock import MagicMock

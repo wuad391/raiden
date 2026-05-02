@@ -188,6 +188,7 @@ def _extract_svo2_synchronized(
                 )
             else:
                 from raiden.depth.tri_stereo import WEIGHTS_HELP
+
                 raise RuntimeError(
                     f"No TRI Stereo model found for variant '{tri_stereo_variant}'. "
                     f"{WEIGHTS_HELP}"

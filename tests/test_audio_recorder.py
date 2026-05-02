@@ -82,10 +82,12 @@ def fake_pyaudio(monkeypatch):
 
     monkeypatch.setattr(audio_mod, "pyaudio", fake_pa_mod, raising=False)
     monkeypatch.setattr(audio_mod, "_PYAUDIO_AVAILABLE", True, raising=False)
-    monkeypatch.setattr(audio_mod, "_PYAUDIO_FORMAT_INT16", fake_pa_mod.paInt16,
-                        raising=False)
-    monkeypatch.setattr(audio_mod, "_PYAUDIO_PA_CONTINUE", fake_pa_mod.paContinue,
-                        raising=False)
+    monkeypatch.setattr(
+        audio_mod, "_PYAUDIO_FORMAT_INT16", fake_pa_mod.paInt16, raising=False
+    )
+    monkeypatch.setattr(
+        audio_mod, "_PYAUDIO_PA_CONTINUE", fake_pa_mod.paContinue, raising=False
+    )
     return fake_instance
 
 
@@ -108,8 +110,7 @@ def _wait_for(predicate, timeout: float, poll: float = 0.05) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_recorder_disabled_when_pyaudio_unavailable(monkeypatch, tmp_path,
-                                                    capsys):
+def test_recorder_disabled_when_pyaudio_unavailable(monkeypatch, tmp_path, capsys):
     """Without PyAudio the recorder is a no-op; recording continues."""
     monkeypatch.setattr(audio_mod, "_PYAUDIO_AVAILABLE", False, raising=False)
     rec = AudioRecorder()
@@ -142,10 +143,12 @@ def test_recorder_disabled_when_no_input_device(monkeypatch, tmp_path, capsys):
 
     fake_mod.PyAudio = _NoDevicePyAudio
     monkeypatch.setattr(audio_mod, "pyaudio", fake_mod, raising=False)
-    monkeypatch.setattr(audio_mod, "_PYAUDIO_FORMAT_INT16", fake_mod.paInt16,
-                        raising=False)
-    monkeypatch.setattr(audio_mod, "_PYAUDIO_PA_CONTINUE", fake_mod.paContinue,
-                        raising=False)
+    monkeypatch.setattr(
+        audio_mod, "_PYAUDIO_FORMAT_INT16", fake_mod.paInt16, raising=False
+    )
+    monkeypatch.setattr(
+        audio_mod, "_PYAUDIO_PA_CONTINUE", fake_mod.paContinue, raising=False
+    )
 
     rec = AudioRecorder()
     rec.start_session()
@@ -179,10 +182,12 @@ def test_open_failure_clears_episode_running(monkeypatch, tmp_path, capsys):
     fake_pa_mod.PyAudio = _OpenFailsPyAudio
     monkeypatch.setattr(audio_mod, "pyaudio", fake_pa_mod, raising=False)
     monkeypatch.setattr(audio_mod, "_PYAUDIO_AVAILABLE", True, raising=False)
-    monkeypatch.setattr(audio_mod, "_PYAUDIO_FORMAT_INT16", fake_pa_mod.paInt16,
-                        raising=False)
-    monkeypatch.setattr(audio_mod, "_PYAUDIO_PA_CONTINUE", fake_pa_mod.paContinue,
-                        raising=False)
+    monkeypatch.setattr(
+        audio_mod, "_PYAUDIO_FORMAT_INT16", fake_pa_mod.paInt16, raising=False
+    )
+    monkeypatch.setattr(
+        audio_mod, "_PYAUDIO_PA_CONTINUE", fake_pa_mod.paContinue, raising=False
+    )
 
     rec = AudioRecorder()
     rec.start_session()
@@ -264,15 +269,24 @@ def test_two_presses_yield_audio_full_plus_two_segments(fake_pyaudio, tmp_path):
     for sc_path in seg_jsons:
         sc = json.loads(sc_path.read_text())
         assert set(sc.keys()) >= {
-            "audio_file", "segment_id", "boundary_t_ns",
-            "duration_s", "clock", "sample_rate", "channels",
+            "audio_file",
+            "segment_id",
+            "boundary_t_ns",
+            "duration_s",
+            "clock",
+            "sample_rate",
+            "channels",
         }
         assert sc["clock"] == _CLOCK_CAMERA
 
     full_sc = json.loads((audio_dir / "audio_full.json").read_text())
     assert set(full_sc.keys()) >= {
-        "audio_file", "start_t_ns", "duration_s", "clock",
-        "sample_rate", "channels",
+        "audio_file",
+        "start_t_ns",
+        "duration_s",
+        "clock",
+        "sample_rate",
+        "channels",
     }
     assert full_sc["clock"] == _CLOCK_CAMERA
 

@@ -1075,8 +1075,11 @@ def run_shardify(
             if not (entry["audio_segments"] or entry.get("audio_full")):
                 continue
             src_audio = next(
-                (ctx["ep_dir"] / "audio" for ctx in ep_contexts
-                 if ctx["episode_id"] == ep_id),
+                (
+                    ctx["ep_dir"] / "audio"
+                    for ctx in ep_contexts
+                    if ctx["episode_id"] == ep_id
+                ),
                 None,
             )
             if src_audio is None or not src_audio.is_dir():

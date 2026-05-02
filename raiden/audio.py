@@ -21,7 +21,7 @@ import time
 from collections import deque
 from datetime import datetime
 from pathlib import Path
-from typing import Callable, Deque, Dict, List, Optional, Tuple
+from typing import Deque, Dict, List, Optional, Tuple
 
 # PyAudio is an optional extra. Keep the import soft so a non-audio install
 # of raiden imports `raiden.audio` without crashing — `AudioRecorder.start_session`

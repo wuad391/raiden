@@ -294,6 +294,7 @@ class RaidenPolicyServer(chiral.PolicyServer):
                     pred._ensure_loaded()
                 else:
                     from raiden.depth.tri_stereo import WEIGHTS_HELP
+
                     raise RuntimeError(
                         f"No TRI Stereo model found for variant '{tri_stereo_variant}'. "
                         f"{WEIGHTS_HELP}"

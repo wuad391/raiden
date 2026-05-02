@@ -954,6 +954,7 @@ def main():
 
             if not onnx_path.exists():
                 from raiden.depth.tri_stereo import WEIGHTS_HELP
+
                 print(f"ONNX model not found: {onnx_path}")
                 print(WEIGHTS_HELP)
                 sys.exit(1)

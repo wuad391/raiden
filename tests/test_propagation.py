@@ -16,8 +16,6 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-import pytest
-
 from raiden.converter import _build_sequence_metadata
 
 
@@ -86,8 +84,12 @@ def test_sequence_metadata_omits_keys_when_raw_has_empty_lists(tmp_path):
     operators should be able to grep `audio_segments` / `audio_full` to
     find episodes that actually carry audio."""
     out = _seq_meta(
-        {"task_name": "x", "event_markers": [], "audio_segments": [],
-         "audio_full": None},
+        {
+            "task_name": "x",
+            "event_markers": [],
+            "audio_segments": [],
+            "audio_full": None,
+        },
         tmp_path,
     )
     assert "event_markers" not in out
@@ -117,20 +119,34 @@ def _build_subtask_index(ep_contexts: list) -> dict:
 
 def test_subtask_index_includes_episodes_with_markers_only():
     """No audio? Episode is still indexed."""
-    eps = [{"episode_id": "ep1",
+    eps = [
+        {
+            "episode_id": "ep1",
             "event_markers": [{"t": 1, "elapsed_s": 0.1, "clock": "camera"}],
-            "audio_segments": []}]
+            "audio_segments": [],
+        }
+    ]
     idx = _build_subtask_index(eps)
     assert "ep1" in idx
     assert idx["ep1"]["audio_segments"] == []
 
 
 def test_subtask_index_includes_episodes_with_audio_only():
-    eps = [{"episode_id": "ep1",
+    eps = [
+        {
+            "episode_id": "ep1",
             "event_markers": [],
-            "audio_segments": [{"segment_id": 0, "audio_file": "a.wav",
-                                "boundary_t_ns": 1, "duration_s": 1.0,
-                                "clock": "camera"}]}]
+            "audio_segments": [
+                {
+                    "segment_id": 0,
+                    "audio_file": "a.wav",
+                    "boundary_t_ns": 1,
+                    "duration_s": 1.0,
+                    "clock": "camera",
+                }
+            ],
+        }
+    ]
     idx = _build_subtask_index(eps)
     assert "ep1" in idx
     assert idx["ep1"]["event_markers"] == []
@@ -139,9 +155,11 @@ def test_subtask_index_includes_episodes_with_audio_only():
 def test_subtask_index_skips_empty_episodes():
     eps = [
         {"episode_id": "ep1", "event_markers": [], "audio_segments": []},
-        {"episode_id": "ep2",
-         "event_markers": [{"t": 1, "elapsed_s": 0.1, "clock": "camera"}],
-         "audio_segments": []},
+        {
+            "episode_id": "ep2",
+            "event_markers": [{"t": 1, "elapsed_s": 0.1, "clock": "camera"}],
+            "audio_segments": [],
+        },
     ]
     idx = _build_subtask_index(eps)
     assert "ep1" not in idx

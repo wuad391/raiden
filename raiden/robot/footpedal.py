@@ -25,6 +25,8 @@ from typing import Callable, List, Optional
 
 from evdev import InputDevice, ecodes
 
+from raiden._warn import warn as _warn
+
 DEVICE_NAME = "PCsensor FootSwitch Keyboard"
 
 # Default key codes emitted by the 3-pedal PCsensor FootSwitch.
@@ -133,8 +135,6 @@ class FootPedal:
 # Optional helper — try to create a FootPedal, return None with a warning on
 # failure (device not connected, permission error, etc.)
 # ---------------------------------------------------------------------------
-
-from raiden._warn import warn as _warn  # noqa: F401  (re-exported for callers)
 
 
 def try_open_footpedal(device_path: Optional[str] = None) -> Optional[FootPedal]:
