@@ -175,3 +175,27 @@ def test_subtask_index_skips_empty_episodes():
     idx = _build_subtask_index(eps)
     assert "ep1" not in idx
     assert "ep2" in idx
+
+
+def test_subtask_index_includes_audio_full_only_episode():
+    """An episode with audio_full but no markers/segments is still indexed
+    (matches `run_shardify`), and the entry carries `audio_full`."""
+    full = {
+        "audio_file": "audio_full.wav",
+        "start_t_ns": 1700000000000000000,
+        "duration_s": 12.5,
+        "clock": "camera",
+    }
+    eps = [
+        {
+            "episode_id": "ep1",
+            "event_markers": [],
+            "audio_segments": [],
+            "audio_full": full,
+        }
+    ]
+    idx = _build_subtask_index(eps)
+    assert "ep1" in idx
+    assert idx["ep1"]["event_markers"] == []
+    assert idx["ep1"]["audio_segments"] == []
+    assert idx["ep1"]["audio_full"] == full

@@ -363,6 +363,11 @@ def test_press_then_immediate_stop_still_yields_a_segment(fake_pyaudio, tmp_path
     post-boundary frame lands.  The contract
     ``len(audio_segments) == len(event_markers)`` must hold, so we emit
     a header-only WAV with duration_s=0 rather than skip the segment.
+
+    With the 0.2 s sleep below, the daemon's main-loop drain catches
+    the boundary BEFORE stop_stream runs.  Coverage of the *other*
+    drain path (post-stream-stop) is in
+    ``test_press_then_stop_no_sleep_drains_via_finally_path``.
     """
     rec = AudioRecorder()
     rec.start_session()
@@ -372,7 +377,7 @@ def test_press_then_immediate_stop_still_yields_a_segment(fake_pyaudio, tmp_path
 
     # Press pedal — but no further frames pushed before stop_episode.
     rec.mark_boundary(1_700_000_000, _CLOCK_CAMERA)
-    time.sleep(0.2)  # let the daemon enqueue the boundary
+    time.sleep(0.2)  # let the daemon's main-loop drain see the boundary
     rec.stop_episode()
     assert rec.wait_until_idle(timeout=3.0) is True
 
@@ -383,6 +388,37 @@ def test_press_then_immediate_stop_still_yields_a_segment(fake_pyaudio, tmp_path
     # audio_full also exists (anchored at the press, zero-length).
     assert drained["audio_full"] is not None
     assert drained["audio_full"]["start_t_ns"] == 1_700_000_000
+    rec.stop_session()
+
+
+def test_press_then_stop_no_sleep_drains_via_finally_path(fake_pyaudio, tmp_path):
+    """Stricter sibling of the test above: NO sleep between
+    ``mark_boundary`` and ``stop_episode``.
+
+    With no sleep, the boundary almost always lands in
+    ``_pending_boundaries`` *after* the daemon's main-loop drain has
+    already run (the daemon was just napping on its 50 ms timer).  The
+    `_episode_running` clear races the next loop iteration, so the
+    boundary is typically caught by the post-stream-stop drain inside
+    the ``finally`` block of ``_capture_one_episode``.
+
+    Either way (main-loop drain or finally drain), the count invariant
+    must hold.
+    """
+    rec = AudioRecorder()
+    rec.start_session()
+    rec.start_episode(tmp_path)
+    _wait_for(lambda: len(fake_pyaudio.streams) == 1, timeout=2.0)
+
+    rec.mark_boundary(1_700_000_001, _CLOCK_CAMERA)
+    rec.stop_episode()  # immediately, no sleep — race vs. daemon loop
+    assert rec.wait_until_idle(timeout=3.0) is True
+
+    drained = rec.drain()
+    assert len(drained["audio_segments"]) == 1
+    assert drained["audio_segments"][0]["boundary_t_ns"] == 1_700_000_001
+    assert drained["audio_full"] is not None
+    assert drained["audio_full"]["start_t_ns"] == 1_700_000_001
     rec.stop_session()
 
 
