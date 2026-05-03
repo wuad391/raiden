@@ -18,7 +18,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - uses: actions/setup-python@v5
         with:
@@ -30,12 +30,21 @@ jobs:
       - name: Build HTML docs
         run: mkdocs build --strict
 
-      - uses: actions/upload-pages-artifact@v3
+      # Only upload the Pages artifact on the canonical repo where
+      # Pages is configured to consume it.  Forks still validate the
+      # docs build above; the deploy job below is also gated on the
+      # canonical repo, so the upload+deploy pair is skipped together.
+      - if: github.repository == 'tri-ml/raiden'
+        uses: actions/upload-pages-artifact@v3
         with:
           path: site
 
   deploy:
     needs: build
+    # GitHub Pages is only enabled on the canonical upstream repo.
+    # Skipping on forks (e.g. wuad391/raiden) avoids a 404 from
+    # actions/deploy-pages on every push to main.
+    if: github.repository == 'tri-ml/raiden'
     runs-on: ubuntu-latest
     environment:
       name: github-pages
