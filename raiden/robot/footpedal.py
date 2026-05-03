@@ -25,6 +25,8 @@ from typing import Callable, List, Optional
 
 from evdev import InputDevice, ecodes
 
+from raiden._warn import warn as _warn
+
 DEVICE_NAME = "PCsensor FootSwitch Keyboard"
 
 # Default key codes emitted by the 3-pedal PCsensor FootSwitch.
@@ -133,16 +135,6 @@ class FootPedal:
 # Optional helper — try to create a FootPedal, return None with a warning on
 # failure (device not connected, permission error, etc.)
 # ---------------------------------------------------------------------------
-
-_YELLOW = "\033[1;33m"
-_RESET = "\033[0m"
-
-
-def _warn(msg: str) -> None:
-    print(f"{_YELLOW}{'!' * 60}{_RESET}")
-    for line in msg.splitlines():
-        print(f"{_YELLOW}  {line}{_RESET}")
-    print(f"{_YELLOW}{'!' * 60}{_RESET}\n")
 
 
 def try_open_footpedal(device_path: Optional[str] = None) -> Optional[FootPedal]:

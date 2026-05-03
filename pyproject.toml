@@ -37,6 +37,7 @@ dependencies = [
 [project.optional-dependencies]
 zed = ["pyzed"]
 realsense = ["pyrealsense2>=2.54"]
+audio = ["pyaudio>=0.2.14"]
 ffs = ["onnxscript>=0.6.2", "omegaconf", "timm"]
 ffs-trt-cu12 = ["onnxscript>=0.6.2", "omegaconf", "timm", "tensorrt-cu12"]
 ffs-trt-cu13 = ["onnxscript>=0.6.2", "omegaconf", "timm", "tensorrt-cu13"]

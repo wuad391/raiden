@@ -1,7 +1,10 @@
 """Abstract base class for teleoperation input methods."""
 
+import threading
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING
+
+from raiden.robot.footpedal import try_open_footpedal
 
 if TYPE_CHECKING:
     from raiden.robot.controller import RobotController
@@ -43,61 +46,88 @@ class TeleopInterface(ABC):
     def open(self) -> None:
         """Open session-level peripherals (footpedal, etc.).
 
-        Called once per session before the first episode.  Default: no-op.
+        Called once per session before the first episode.  Default: opens
+        the foot pedal with subtask-boundary semantics.  Subclasses that
+        need additional session-level setup should call ``super().open()``
+        first.
         """
+        self._open_footpedal_for_subtask_latches()
 
     def close(self) -> None:
         """Close session-level peripherals.
 
-        Called once at session end.  Default: no-op.
+        Called once at session end.  Default: closes the foot pedal if it
+        was opened by ``open()``.
         """
+        if getattr(self, "_footpedal", None) is not None:
+            self._footpedal.close()
+            self._footpedal = None
+
+    def _open_footpedal_for_subtask_latches(self) -> None:
+        """Initialise the subtask Event and bind the pedal callback.
+
+        A single ``threading.Event`` is set on each press; the recorder
+        thread polls it, captures the camera clock once, and fans the
+        timestamp out to ``add_event_marker`` and (when audio is enabled)
+        to ``AudioRecorder.mark_boundary``.  The callback is gated on
+        ``_recording_controller is not None`` so presses outside an
+        active recording are ignored (no soft-pause, no start/stop).
+        """
+        self._pedal_subtask = threading.Event()
+        # Initialised before the footpedal thread is started so the
+        # callback can never race a missing attribute on the first press.
+        self._recording_controller = None
+        self._footpedal = try_open_footpedal()
+        if self._footpedal is None:
+            return
+
+        def _cb(_code: int) -> None:
+            if self._recording_controller is not None:
+                self._pedal_subtask.set()
+
+        self._footpedal.on_press(_cb)
+        self._footpedal.start()
+        print("  ✓ FootPedal ready: press to mark a subtask boundary")
 
     def set_active_recording(self, robot_controller=None) -> None:
         """Notify the interface whether a recording episode is active.
 
-        When a controller is provided (episode started), footpedal left calls
-        ``robot_controller.soft_pause()`` instead of firing a trigger event.
-        Pass None when the episode ends.  Default: no-op.
+        Pass the controller when an episode starts; pass None when it ends.
+        Used by interfaces that want to gate pedal latches on the
+        recording-active state.  Default: no-op.
         """
         self._recording_controller = robot_controller
 
-    def set_marking_mode(self, enabled: bool) -> None:
-        """Enable event-marking pedal semantics for the rest of the session.
+    def poll_subtask(self, robot_controller: "RobotController") -> bool:
+        """Return True if the operator pressed the subtask-boundary pedal
+        during an active recording.
 
-        When enabled, AND a recording is active, the middle pedal becomes an
-        event marker (``poll_event_marker``) and the right pedal becomes an
-        end-trajectory trigger (``poll_end_trajectory``) instead of marking
-        success/failure.  Outside of an active recording (verdict prompt and
-        between episodes) the pedals behave as in normal mode.
-        Default: no-op (marking mode unsupported).
+        Consumed by the recorder to capture a timestamp once (passed to
+        both ``add_event_marker`` and ``AudioRecorder.mark_boundary`` so
+        the two consumers see bit-identical timestamps).  Default
+        implementation drains ``_pedal_subtask`` (initialised in
+        ``open()``).
         """
-        self._marking_mode = enabled
-
-    def poll_event_marker(self, robot_controller: "RobotController") -> bool:
-        """Return True if the user pressed the event-marker pedal (middle, in
-        marking mode while recording).  Default: never triggers."""
-        return False
-
-    def poll_end_trajectory(self, robot_controller: "RobotController") -> bool:
-        """Return True if the user pressed the end-trajectory pedal (right, in
-        marking mode while recording).  Default: never triggers."""
+        if self._pedal_subtask.is_set():
+            self._pedal_subtask.clear()
+            return True
         return False
 
     def poll(self, robot_controller: "RobotController") -> bool:
-        """Return True on a trigger event (button press, footpedal left, etc.).
+        """Return True on a session-level trigger event (leader-arm button,
+        etc.).  Used to start/stop episodes on interfaces with hardware
+        buttons.  Default: never triggers."""
+        return False
 
-        Used as: start/stop recording in recorder, record-pose in calibration.
-        Default: never triggers.
+    def drain_pedal_events(self, robot_controller: "RobotController") -> None:
+        """Discard any latched pedal events so they don't bleed across phases.
+
+        ``threading.Event``-backed pedal latches stay set until polled;
+        without an explicit drain at episode boundaries a stray press
+        queued during a previous wait would auto-mark the next episode.
         """
-        return False
-
-    def poll_success(self, robot_controller: "RobotController") -> bool:
-        """Return True if the user signalled a success outcome (footpedal middle)."""
-        return False
-
-    def poll_failure(self, robot_controller: "RobotController") -> bool:
-        """Return True if the user signalled a failure outcome (footpedal right / failure button)."""
-        return False
+        self.poll(robot_controller)
+        self.poll_subtask(robot_controller)
 
     @property
     def uses_leaders(self) -> bool:
@@ -110,9 +140,4 @@ class TeleopInterface(ABC):
 
         False means keyboard / Enter key is used instead.
         """
-        return self.uses_leaders
-
-    @property
-    def supports_verdict_button(self) -> bool:
-        """True if leader-arm buttons can be used to mark success/failure."""
         return self.uses_leaders

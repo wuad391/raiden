@@ -13,9 +13,11 @@ Model files
 -----------
 Model files are searched in order:
 
-1. ``~/.config/raiden/weights/tri_stereo/`` — user config (subdirectory)
+1. ``~/.config/raiden/weights/tri_stereo/`` — user config (subdirectory; preferred)
 2. ``~/.config/raiden/weights/`` — user config (flat layout)
-3. ``<repo>/weights/tri_stereo/`` — tracked via git-lfs (canonical)
+3. ``<repo>/weights/tri_stereo/`` — repo-local fallback (bundled LFS pointers
+   were removed in this fork; see README §"Fork changes" for bring-your-own
+   weights instructions)
 
 =============  ===========================
 Backend        Filename
@@ -33,6 +35,13 @@ from typing import Optional
 
 import cv2
 import numpy as np
+
+
+WEIGHTS_HELP = (
+    "Drop your own stereo_c{32,64}.onnx into "
+    "~/.config/raiden/weights/tri_stereo/ — see README "
+    "§'Fork changes' → 'TRI Stereo bundled weights removed'."
+)
 
 # Search order for model files.
 _SEARCH_DIRS = [
@@ -147,7 +156,7 @@ class TRIStereoOnnxDepthPredictor:
 
         if not self._onnx_path.exists():
             raise RuntimeError(
-                f"TRI Stereo ONNX model not found: {self._onnx_path}. Run: git lfs pull"
+                f"TRI Stereo ONNX model not found: {self._onnx_path}. {WEIGHTS_HELP}"
             )
 
         providers = (

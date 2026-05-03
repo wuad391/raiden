@@ -100,6 +100,54 @@ def list_spacemice() -> list:
 
 
 # ---------------------------------------------------------------------------
+# Microphones (PyAudio input devices)
+# ---------------------------------------------------------------------------
+
+
+def list_microphones() -> list:
+    """Enumerate PyAudio input devices.
+
+    Returns a list of ``{"index", "name", "channels", "default_rate",
+    "is_default"}`` dicts.  Returns ``[]`` when PyAudio is not installed
+    or no input devices are present — same convention as
+    ``list_realsense_cameras`` / ``list_zed_cameras`` / ``list_spacemice``.
+
+    Use the returned ``index`` with ``rd record --record-audio
+    --audio-device-index <index>``.
+    """
+    try:
+        import pyaudio  # type: ignore[import-not-found]
+    except ImportError:
+        return []
+    pa = pyaudio.PyAudio()
+    try:
+        try:
+            default_index = pa.get_default_input_device_info()["index"]
+        except (OSError, IOError):
+            default_index = None
+        results = []
+        for i in range(pa.get_device_count()):
+            try:
+                info = pa.get_device_info_by_index(i)
+            except (OSError, IOError):
+                continue
+            if int(info.get("maxInputChannels", 0)) <= 0:
+                continue
+            results.append(
+                {
+                    "index": int(info["index"]),
+                    "name": str(info.get("name", "")).strip(),
+                    "channels": int(info["maxInputChannels"]),
+                    "default_rate": int(info.get("defaultSampleRate", 0)),
+                    "is_default": int(info["index"]) == default_index,
+                }
+            )
+        return results
+    finally:
+        pa.terminate()
+
+
+# ---------------------------------------------------------------------------
 # Combined listing
 # ---------------------------------------------------------------------------
 
@@ -150,6 +198,22 @@ def list_devices() -> None:
             print(f"  {m['path']:<20}  {m['description']}")
     else:
         print("  (none)")
+
+    # ── Microphones (PyAudio) ─────────────────────────────────────────────
+    mics = list_microphones()
+    print(f"\nMicrophones: {len(mics)} input device(s) found")
+    print("-" * 40)
+    if mics:
+        for m in mics:
+            default_tag = "  [default]" if m["is_default"] else ""
+            print(
+                f"  index={m['index']:<3}  "
+                f"channels={m['channels']:<2}  "
+                f"rate={m['default_rate']:>6}  "
+                f"{m['name']}{default_tag}"
+            )
+    else:
+        print("  (none)  — install PyAudio with: uv sync --extra audio")
 
     # ── Auto-generate camera.json if missing ─────────────────────────────
     print("\nConfig files stored in: ~/.config/raiden/")

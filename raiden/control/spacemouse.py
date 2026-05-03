@@ -1,14 +1,6 @@
 """SpaceMouse Cartesian velocity teleoperation."""
 
-import threading
-
 from raiden.control.base import TeleopInterface
-from raiden.robot.footpedal import (
-    PEDAL_LEFT,
-    PEDAL_MIDDLE,
-    PEDAL_RIGHT,
-    try_open_footpedal,
-)
 
 
 class SpaceMouseInterface(TeleopInterface):
@@ -33,50 +25,7 @@ class SpaceMouseInterface(TeleopInterface):
         return "spacemouse"
 
     # ------------------------------------------------------------------
-    # Session-level lifecycle (footpedal)
-    # ------------------------------------------------------------------
-
-    def open(self) -> None:
-        self._pedal_trigger = threading.Event()
-        self._pedal_success = threading.Event()
-        self._pedal_failure = threading.Event()
-        self._pedal_event_marker = threading.Event()
-        self._pedal_end_trajectory = threading.Event()
-        self._marking_mode = False
-        self._footpedal = try_open_footpedal()
-        if self._footpedal is not None:
-
-            def _cb(code: int) -> None:
-                if code == PEDAL_LEFT:
-                    rc = getattr(self, "_recording_controller", None)
-                    if rc is not None:
-                        rc.soft_pause()
-                    else:
-                        self._pedal_trigger.set()
-                elif code == PEDAL_MIDDLE:
-                    if self._marking_mode and self._recording_controller is not None:
-                        self._pedal_event_marker.set()
-                    else:
-                        self._pedal_success.set()
-                elif code == PEDAL_RIGHT:
-                    if self._marking_mode and self._recording_controller is not None:
-                        self._pedal_end_trajectory.set()
-                    else:
-                        self._pedal_failure.set()
-
-            self._footpedal.on_press(_cb)
-            self._footpedal.start()
-            print(
-                "  ✓ FootPedal ready: left=trigger/pause  middle=success  right=failure"
-            )
-
-    def close(self) -> None:
-        if getattr(self, "_footpedal", None) is not None:
-            self._footpedal.close()
-            self._footpedal = None
-
-    # ------------------------------------------------------------------
-    # Episode-level lifecycle
+    # Episode-level lifecycle (footpedal handled by TeleopInterface base)
     # ------------------------------------------------------------------
 
     def setup(self, robot_controller) -> None:
@@ -92,45 +41,6 @@ class SpaceMouseInterface(TeleopInterface):
 
     def stop(self, robot_controller) -> None:
         robot_controller.stop_spacemouse_teleop()
-
-    # ------------------------------------------------------------------
-    # Polling
-    # ------------------------------------------------------------------
-
-    def poll(self, robot_controller) -> bool:
-        trigger = getattr(self, "_pedal_trigger", None)
-        if trigger is not None and trigger.is_set():
-            trigger.clear()
-            return True
-        return False
-
-    def poll_success(self, robot_controller) -> bool:
-        ev = getattr(self, "_pedal_success", None)
-        if ev is not None and ev.is_set():
-            ev.clear()
-            return True
-        return False
-
-    def poll_failure(self, robot_controller) -> bool:
-        ev = getattr(self, "_pedal_failure", None)
-        if ev is not None and ev.is_set():
-            ev.clear()
-            return True
-        return False
-
-    def poll_event_marker(self, robot_controller) -> bool:
-        ev = getattr(self, "_pedal_event_marker", None)
-        if ev is not None and ev.is_set():
-            ev.clear()
-            return True
-        return False
-
-    def poll_end_trajectory(self, robot_controller) -> bool:
-        ev = getattr(self, "_pedal_end_trajectory", None)
-        if ev is not None and ev.is_set():
-            ev.clear()
-            return True
-        return False
 
     @property
     def banner(self) -> str:

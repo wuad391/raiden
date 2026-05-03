@@ -90,11 +90,18 @@ class RecordCommand:
     arms: Literal["bimanual", "single"] = "bimanual"
     """Which arms to use: both (bimanual) or left arm only (single)"""
 
-    marking_mode: bool = False
-    """Repurpose foot pedals during recording for event marking:
-    middle pedal logs an event timestamp, right pedal ends the trajectory
-    (no immediate verdict).  After the trajectory ends the verdict prompt
-    behaves normally (middle=success, right=failure, left=no-op)."""
+    record_audio: bool = False
+    """Record continuous microphone audio in parallel with the trajectory.
+    The mic stream opens at episode start; the period before the first
+    foot-pedal press is treated as warm-up noise and discarded. From the
+    first press onwards, two WAV shapes land under `<recording_dir>/audio/`:
+    `audio_full.wav` (continuous, first-press → end-of-episode) plus one
+    `audio_<i>_HHMMSS.wav` per inter-press interval (sample-aligned slices
+    of `audio_full`). `metadata.json` gains `audio_full` and
+    `audio_segments`. PyAudio must be installed (`uv sync --extra audio`)."""
+
+    audio_device_index: Optional[int] = None
+    """Optional PyAudio input device index. Default: system default mic."""
 
 
 _CAN_BITRATE = 1000000
@@ -487,7 +494,8 @@ def main():
                 ),
                 arms=command.arms,
                 data_dir=command.data_dir,
-                marking_mode=command.marking_mode,
+                record_audio=command.record_audio,
+                audio_device_index=command.audio_device_index,
             )
 
         elif subcommand == "replay":
@@ -945,8 +953,10 @@ def main():
             )
 
             if not onnx_path.exists():
+                from raiden.depth.tri_stereo import WEIGHTS_HELP
+
                 print(f"ONNX model not found: {onnx_path}")
-                print("Run: git lfs pull")
+                print(WEIGHTS_HELP)
                 sys.exit(1)
 
             print(f"ONNX    : {onnx_path}")
