@@ -308,8 +308,9 @@ class _HelpScreen(ModalScreen):
 
             yield Static("Workflow", classes="help-heading")
             yield Static(
-                "Mark each episode as Success or Failure directly from the teaching\n"
-                "hardware during recording. Open the console only to correct mistakes.\n\n"
+                "Mark each episode as Success or Failure at the keyboard verdict\n"
+                "prompt that appears after every recording. Open the console only\n"
+                "to correct mistakes.\n\n"
                 "Only successful demonstrations are converted when you run  rd convert.",
                 classes="help-body",
             )
@@ -317,9 +318,14 @@ class _HelpScreen(ModalScreen):
             yield Static("Marking demonstrations", classes="help-heading")
             yield Static(
                 "During recording:\n"
-                "  Left pedal / leader button          Start or stop recording\n"
-                "  Middle pedal / top leader button    Mark as Success\n"
-                "  Right pedal / bottom leader button  Mark as Failure\n\n"
+                "  Leader-arm button (or Enter, in SpaceMouse mode)  Start or stop recording\n"
+                "  Foot pedal (any button)                           Log a subtask boundary\n"
+                "                                                    into event_markers\n"
+                "  Ctrl-C                                            Emergency stop\n\n"
+                "After each recording (verdict prompt):\n"
+                "  Enter                Mark as Success\n"
+                "  f                    Mark as Failure\n"
+                "  any other key        Leave as Pending (relabel later in this tab)\n\n"
                 "In the Demonstrations tab:\n"
                 "  ↑ / ↓                Navigate rows\n"
                 "  Space                Toggle selection on the current row\n"
