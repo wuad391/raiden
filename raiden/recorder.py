@@ -936,7 +936,14 @@ def run_recording(
             )
             interface.start(robot_controller)
             recorder.start_recording()
-            robot_controller.enable_estop()
+            # NOTE: deliberately NOT calling robot_controller.enable_estop()
+            # here.  Under this fork, the foot pedal is dedicated to subtask
+            # boundaries during recording (see README §"Single-pedal subtask
+            # boundaries").  enable_estop() would arm soft_pause on the LEFT
+            # pedal as a side-effect of every press, which contradicts that
+            # contract.  Emergency stop during recording is Ctrl-C.
+            # (rd teleop and rd serve still use their own enable_estop /
+            # attach_footpedal paths, unaffected by this.)
             interface.set_active_recording(robot_controller)
             interface.drain_pedal_events(robot_controller)
 
