@@ -65,8 +65,9 @@ def test_operator_smoke_5_episode_warmup() -> None:
 
     Cross-references
     ----------------
-    - tasks/lessons.md (kshitiz2 root) entries L1-L4 — the four bugs
-      this checklist guards against.
     - docs/guide/recording.md §"Subtask boundaries during a trajectory"
       — operator-facing pedal mapping.
+    - docs/guide/safety.md §"Foot pedal — mode-dependent behavior"
+      — confirms pedal during recording is dedicated to subtask
+      boundaries (no soft e-stop side-effect).
     """
