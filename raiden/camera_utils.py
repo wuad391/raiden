@@ -103,6 +103,8 @@ def list_spacemice() -> list:
 # Foot pedals (PCsensor FootSwitch via /sys/class/input)
 # ---------------------------------------------------------------------------
 
+_FOOTPEDAL_DEVICE_NAME = "PCsensor FootSwitch Keyboard"
+
 
 def list_footpedals() -> list:
     """Enumerate connected PCsensor FootSwitch devices.
@@ -113,8 +115,6 @@ def list_footpedals() -> list:
     empty list when no matching device is plugged in (or none of them
     advertise the expected name).
     """
-    from raiden.robot.footpedal import DEVICE_NAME
-
     found: list = []
     for event_dir in sorted(
         Path("/sys/class/input").glob("event*"),
@@ -127,7 +127,7 @@ def list_footpedals() -> list:
             name = name_file.read_text().strip()
         except OSError:
             continue
-        if DEVICE_NAME.lower() in name.lower():
+        if _FOOTPEDAL_DEVICE_NAME.lower() in name.lower():
             found.append({"path": f"/dev/input/{event_dir.name}", "name": name})
     return found
 

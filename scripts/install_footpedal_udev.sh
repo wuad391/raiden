@@ -7,6 +7,7 @@ set -euo pipefail
 
 RULE_FILE=/etc/udev/rules.d/99-footpedal.rules
 NAME_HINT="PCsensor FootSwitch Keyboard"
+TARGET_USER="${SUDO_USER:-$USER}"
 
 # Find the matching event device via /sys (no device-open permission needed)
 SYS_DEV=""
@@ -33,13 +34,23 @@ echo "Vendor  : $VENDOR  Product : $PRODUCT"
 
 cat > "$RULE_FILE" <<EOF
 # $DEV_NAME
-SUBSYSTEM=="input", ATTRS{idVendor}=="$VENDOR", ATTRS{idProduct}=="$PRODUCT", GROUP="input", MODE="0664"
+SUBSYSTEM=="input", ATTRS{idVendor}=="$VENDOR", ATTRS{idProduct}=="$PRODUCT", GROUP="input", MODE="0660"
 EOF
 
 echo "Written : $RULE_FILE"
 
 udevadm control --reload-rules
 udevadm trigger
+
+if id "$TARGET_USER" >/dev/null 2>&1; then
+    if ! id -nG "$TARGET_USER" | tr ' ' '\n' | grep -qx input; then
+        usermod -a -G input "$TARGET_USER"
+        echo "Added $TARGET_USER to the 'input' group."
+        echo "Log out and back in (or reboot) for the group change to take effect."
+    else
+        echo "$TARGET_USER is already in the 'input' group."
+    fi
+fi
 
 echo ""
 echo "Done. Unplug and replug the footpedal — then run without sudo:"
