@@ -17,7 +17,7 @@
 
 | Command | Description |
 |---|---|
-| `rd list_devices` | List all connected cameras, arms, SpaceMouse devices, and microphones |
+| `rd list_devices` | List all connected cameras, arms, SpaceMouse devices, foot pedals, and microphones |
 | `rd calibrate` | Calibrate cameras (hand-eye + scene extrinsics) |
 | `rd teleop` | Teleoperate arms without recording |
 | `rd record` | Record teleoperation demonstrations |

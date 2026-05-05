@@ -100,6 +100,39 @@ def list_spacemice() -> list:
 
 
 # ---------------------------------------------------------------------------
+# Foot pedals (PCsensor FootSwitch via /sys/class/input)
+# ---------------------------------------------------------------------------
+
+
+def list_footpedals() -> list:
+    """Enumerate connected PCsensor FootSwitch devices.
+
+    Reads /sys/class/input directly so this works without device-open
+    permission — useful for verifying udev-rule install before opening
+    the device for real.  Returns a list of ``{"path", "name"}`` dicts;
+    empty list when no matching device is plugged in (or none of them
+    advertise the expected name).
+    """
+    from raiden.robot.footpedal import DEVICE_NAME
+
+    found: list = []
+    for event_dir in sorted(
+        Path("/sys/class/input").glob("event*"),
+        key=lambda p: int(p.name[5:]),
+    ):
+        name_file = event_dir / "device" / "name"
+        if not name_file.exists():
+            continue
+        try:
+            name = name_file.read_text().strip()
+        except OSError:
+            continue
+        if DEVICE_NAME.lower() in name.lower():
+            found.append({"path": f"/dev/input/{event_dir.name}", "name": name})
+    return found
+
+
+# ---------------------------------------------------------------------------
 # Microphones (PyAudio input devices)
 # ---------------------------------------------------------------------------
 
@@ -153,7 +186,8 @@ def list_microphones() -> list:
 
 
 def list_devices() -> None:
-    """Print all connected cameras, robot arms, and SpaceMouse devices."""
+    """Print all connected cameras, robot arms, SpaceMouse devices, foot
+    pedals, and microphones."""
 
     # ── Cameras ──────────────────────────────────────────────────────────
     zed_cams = list_zed_cameras()
@@ -198,6 +232,21 @@ def list_devices() -> None:
             print(f"  {m['path']:<20}  {m['description']}")
     else:
         print("  (none)")
+
+    # ── Foot pedals (PCsensor FootSwitch via /sys/class/input) ────────────
+    pedals = list_footpedals()
+    print(f"\nFoot pedals: {len(pedals)} found")
+    print("-" * 40)
+    if pedals:
+        for p in pedals:
+            print(f"  {p['path']:<22}  {p['name']}")
+    else:
+        print(
+            "  (none)  — if plugged in but not listed, install the udev rule "
+            "with:\n"
+            "         sudo bash scripts/install_footpedal_udev.sh\n"
+            "         (then unplug and replug the pedal)"
+        )
 
     # ── Microphones (PyAudio) ─────────────────────────────────────────────
     mics = list_microphones()

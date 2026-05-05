@@ -422,7 +422,7 @@ def _print_help() -> None:
     print("  record_calibration_poses    Record robot poses for camera calibration")
     print("  calibrate                   Run camera calibration using recorded poses")
     print(
-        "  list_devices                List all connected cameras, arms, SpaceMouse devices, and microphones"
+        "  list_devices                List all connected cameras, arms, SpaceMouse devices, foot pedals, and microphones"
     )
     print(
         "  shardify                    Export converted episodes to WebDataset shards"

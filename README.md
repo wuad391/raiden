@@ -39,7 +39,7 @@ sudo apt install portaudio19-dev           # only on fresh Ubuntu, if PyAudio fa
 
 | Command | What it does |
 |---|---|
-| `rd list_devices` | Enumerate cameras, robot arms, SpaceMouse, microphones |
+| `rd list_devices` | Enumerate cameras, robot arms, SpaceMouse, foot pedals, microphones |
 | `rd record_calibration_poses` | Record robot poses for camera calibration |
 | `rd calibrate` | Hand-eye + scene-extrinsic calibration |
 | `rd teleop` | Teleoperate without recording |
