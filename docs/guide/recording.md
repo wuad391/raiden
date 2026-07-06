@@ -106,7 +106,9 @@ During the session:
   end the session.
 - During recording, each **foot-pedal press** logs a subtask boundary into
   `event_markers` (and into `audio_segments` when `--record-audio` is on).
-- Press **Ctrl-C** for an emergency stop.
+- Press **Ctrl-C** for an emergency stop: arms hold for 5 s, return home,
+  and the process exits. The interrupted episode is left without metadata,
+  so it is detected as incomplete and its directory is reused next time.
 
 ## Marking demonstrations
 

@@ -21,7 +21,7 @@ done
 
 if [[ -z "$SYS_DEV" ]]; then
     echo "Error: no device matching '$NAME_HINT' found."
-    echo "Check 'python scripts/test_footpedal.py --list' for available devices."
+    echo "Check 'python3 scripts/test_footpedal.py --list' for available devices."
     exit 1
 fi
 
@@ -42,16 +42,23 @@ echo "Written : $RULE_FILE"
 udevadm control --reload-rules
 udevadm trigger
 
+GROUP_CHANGED=0
 if id "$TARGET_USER" >/dev/null 2>&1; then
     if ! id -nG "$TARGET_USER" | tr ' ' '\n' | grep -qx input; then
         usermod -a -G input "$TARGET_USER"
+        GROUP_CHANGED=1
         echo "Added $TARGET_USER to the 'input' group."
-        echo "Log out and back in (or reboot) for the group change to take effect."
     else
         echo "$TARGET_USER is already in the 'input' group."
     fi
 fi
 
 echo ""
-echo "Done. Unplug and replug the footpedal — then run without sudo:"
-echo "  python scripts/test_footpedal.py"
+if [[ "$GROUP_CHANGED" -eq 1 ]]; then
+    echo "Done. Unplug and replug the footpedal, then LOG OUT AND BACK IN"
+    echo "(the new 'input' group membership does not apply to this shell)."
+    echo "After logging back in, verify without sudo:"
+else
+    echo "Done. Unplug and replug the footpedal — then verify without sudo:"
+fi
+echo "  python3 scripts/test_footpedal.py"

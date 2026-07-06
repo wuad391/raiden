@@ -20,20 +20,20 @@ Opening the device itself does require the udev rule (or sudo).  Run once::
 """
 
 import threading
-from pathlib import Path
 from typing import Callable, List, Optional
 
 from evdev import InputDevice, ecodes
 
 from raiden._warn import warn as _warn
 
-DEVICE_NAME = "PCsensor FootSwitch Keyboard"
-
-# Default key codes emitted by the 3-pedal PCsensor FootSwitch.
-# Adjust if your device is configured differently (use `evtest` to confirm).
-PEDAL_LEFT = 30  # KEY_A — start / stop recording
-PEDAL_MIDDLE = 48  # KEY_B — mark demonstration as success
-PEDAL_RIGHT = 46  # KEY_C — mark demonstration as failure
+# Shared with `rd list_devices` and scripts/test_footpedal.py.
+from raiden.robot.pedal_constants import (  # noqa: F401  (re-exported)
+    DEVICE_NAME,
+    PEDAL_LEFT,
+    PEDAL_MIDDLE,
+    PEDAL_RIGHT,
+    find_pedal_event_devices,
+)
 
 
 class FootPedal:
@@ -56,16 +56,9 @@ class FootPedal:
     @staticmethod
     def _find_device_path() -> str:
         """Scan /sys/class/input for a matching device name (no open needed)."""
-        for event_dir in sorted(
-            Path("/sys/class/input").glob("event*"),
-            key=lambda p: int(p.name[5:]),
-        ):
-            name_file = event_dir / "device" / "name"
-            if (
-                name_file.exists()
-                and DEVICE_NAME.lower() in name_file.read_text().lower()
-            ):
-                return f"/dev/input/{event_dir.name}"
+        devices = find_pedal_event_devices()
+        if devices:
+            return devices[0]["path"]
         raise RuntimeError(
             f"FootPedal ({DEVICE_NAME!r}) not found. "
             "Make sure it is plugged in. "

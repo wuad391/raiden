@@ -298,9 +298,12 @@ class CalibrationPoseRecorder:
             print("  2. Move the robot arms using the input device")
         print("  3. Position so the board is clearly visible from the camera(s)")
         if self.interface.waits_for_button_start:
-            print("  4. Press button on any leader arm OR type 'r' to record pose")
+            print(
+                "  4. Press button on any leader arm, tap the foot pedal, "
+                "OR type 'r' to record pose"
+            )
         else:
-            print("  4. Type 'r' to record pose")
+            print("  4. Tap the foot pedal OR type 'r' to record pose")
         print(
             f"  5. Record at least {min_poses} diverse poses (vary distance and angle)"
         )
@@ -319,6 +322,9 @@ class CalibrationPoseRecorder:
 
         print("\n" + "=" * 70)
         print("\nReady to record poses!")
+
+        # Discard any pedal press latched during setup.
+        self.interface.drain_pedal_events(self.robot_controller)
 
         # Save terminal settings for raw mode
         old_settings = None
@@ -346,8 +352,11 @@ class CalibrationPoseRecorder:
                 # Monitor button presses in a loop
                 command = None
                 while command is None:
-                    # Interface poll: leader button or footpedal left → record pose
-                    if self.interface.poll(self.robot_controller):
+                    # Leader button or foot pedal → record pose
+                    if (
+                        self.interface.poll(self.robot_controller)
+                        or self.interface.poll_pedal_trigger()
+                    ):
                         print("\n\nInput received! Recording pose...")
                         time.sleep(0.1)  # Debounce
                         command = "r"

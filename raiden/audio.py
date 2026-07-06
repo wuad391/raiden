@@ -95,6 +95,12 @@ class AudioRecorder:
         self._episode_running = threading.Event()
         self._idle = threading.Event()
         self._idle.set()
+        # Guards the episode_running/idle transition so the daemon's idle
+        # acknowledgement can't interleave with start_episode.  The
+        # generation counter keeps a daemon that outlives a wait_until_idle
+        # timeout from touching the next episode's state.
+        self._state_lock = threading.Lock()
+        self._episode_gen = 0
         self._segments: List[Dict] = []
         self._full: Optional[Dict] = None
         # Boundaries pushed by the recorder thread; drained by the audio
@@ -166,12 +172,16 @@ class AudioRecorder:
         """
         if not self._enabled:
             return
-        self._episode_dir = Path(recording_dir)
-        self._segments = []
-        self._full = None
-        self._pending_boundaries.clear()
-        self._idle.set()
-        self._episode_running.set()
+        # wait_until_idle must block until the daemon has finished or
+        # acknowledged this episode.
+        with self._state_lock:
+            self._episode_gen += 1
+            self._episode_dir = Path(recording_dir)
+            self._segments = []
+            self._full = None
+            self._pending_boundaries.clear()
+            self._episode_running.set()
+            self._idle.clear()
 
     def mark_boundary(self, t_ns: int, clock: str) -> None:
         """Push a subtask-boundary timestamp into the audio stream.
@@ -228,12 +238,13 @@ class AudioRecorder:
         ``audio_segments`` is one entry per pedal press — empty when the
         operator never pressed during this episode.
         """
-        out = {
-            "audio_full": self._full,
-            "audio_segments": list(self._segments),
-        }
-        self._full = None
-        self._segments = []
+        with self._state_lock:
+            out = {
+                "audio_full": self._full,
+                "audio_segments": list(self._segments),
+            }
+            self._full = None
+            self._segments = []
         return out
 
     @property
@@ -248,20 +259,47 @@ class AudioRecorder:
     def _run(self) -> None:
         try:
             while self._session_running:
-                if not self._episode_running.is_set():
+                with self._state_lock:
+                    claimed = self._episode_running.is_set()
+                    if claimed:
+                        gen = self._episode_gen
+                        episode_dir = self._episode_dir
+                        self._idle.clear()
+                    else:
+                        # Acknowledge an episode that started and stopped
+                        # before we woke up, so wait_until_idle returns.
+                        self._idle.set()
+                if not claimed:
                     time.sleep(0.05)
                     continue
-                self._capture_one_episode()
-        except (OSError, RuntimeError, ValueError) as e:
-            # Expected failure modes from PyAudio / disk IO / clock reads.
-            # Print loud and re-raise so the operator sees the daemon died
-            # (rather than silently no-op'ing all subsequent episodes).
-            print(f"  ! AudioRecorder thread died ({type(e).__name__}: {e})")
-            raise
+                try:
+                    self._capture_one_episode(gen, episode_dir)
+                except Exception as e:
+                    # Drop this episode's audio but keep the daemon alive —
+                    # dying here would silently lose every later episode.
+                    print(
+                        f"  ! AudioRecorder episode failed "
+                        f"({type(e).__name__}: {e}); audio lost for this "
+                        "episode, daemon still running"
+                    )
+                    self._clear_running_if_current(gen)
+                finally:
+                    # Only wake waiters for the episode we actually served —
+                    # if a new episode started after a flush timeout, its
+                    # idle flag is not ours to set.
+                    with self._state_lock:
+                        if self._episode_gen == gen:
+                            self._idle.set()
         finally:
             self._idle.set()
 
-    def _capture_one_episode(self) -> None:
+    def _clear_running_if_current(self, gen: int) -> None:
+        """Stop re-claiming episode ``gen`` without cancelling a newer one."""
+        with self._state_lock:
+            if self._episode_gen == gen:
+                self._episode_running.clear()
+
+    def _capture_one_episode(self, gen: int, episode_dir: Optional[Path]) -> None:
         """Open the stream at episode start, capture continuously, save on stop.
 
         Audio is captured from the moment ``start_episode`` is called until
@@ -273,9 +311,8 @@ class AudioRecorder:
         inter-press interval plus a single ``audio_full.wav`` covering
         first-press → end-of-episode.
         """
-        episode_dir = self._episode_dir
         if episode_dir is None:
-            self._episode_running.clear()
+            self._clear_running_if_current(gen)
             return
 
         frames: List[bytes] = []
@@ -297,16 +334,12 @@ class AudioRecorder:
                 stream_callback=_callback,
             )
         except (OSError, IOError) as e:
-            # Don't loop: clearing _episode_running stops _run from
-            # immediately re-entering this function (which would spam
-            # logs and re-attempt opens for the rest of the episode on
-            # a permanently-failed device).  The next start_episode()
-            # gives the daemon a fresh attempt.
+            # Clearing _episode_running stops _run from re-attempting opens
+            # for the rest of the episode on a permanently-failed device.
             print(f"  ! AudioRecorder.open() failed ({e}); audio off for this episode")
-            self._episode_running.clear()
+            self._clear_running_if_current(gen)
             return
 
-        self._idle.clear()
         print("  ✓ Audio stream open (warm-up noise discarded until first press)")
 
         try:
@@ -333,15 +366,15 @@ class AudioRecorder:
                 # or device disconnect.  Cleanup-path only — log and move on.
                 print("  ! AudioRecorder stream cleanup raised; continuing")
             # Drain any boundary pushed in the gap between the last poll
-            # and stop_episode() so the final segment isn't lost.
-            while self._pending_boundaries:
-                ts_ns, clock = self._pending_boundaries.popleft()
-                boundaries.append((len(frames), ts_ns, clock, time.time()))
+            # and stop_episode() so the final segment isn't lost.  Gen-gated
+            # so a stalled cleanup can't steal the next episode's presses.
+            with self._state_lock:
+                if self._episode_gen == gen:
+                    while self._pending_boundaries:
+                        ts_ns, clock = self._pending_boundaries.popleft()
+                        boundaries.append((len(frames), ts_ns, clock, time.time()))
 
-        try:
-            self._save_audio(episode_dir, frames, boundaries)
-        finally:
-            self._idle.set()
+        self._save_audio(gen, episode_dir, frames, boundaries)
 
     # ------------------------------------------------------------------
     # Serialisation
@@ -349,6 +382,7 @@ class AudioRecorder:
 
     def _save_audio(
         self,
+        gen: int,
         episode_dir: Path,
         frames: List[bytes],
         boundaries: List[Tuple[int, int, str, float]],
@@ -376,6 +410,7 @@ class AudioRecorder:
         timestamp_str = datetime.now().strftime("%Y%m%d_%H%M%S")
 
         first_idx, first_ts_ns, first_clock, first_wall = boundaries[0]
+        segments_out: List[Dict] = []
 
         # ── per-press segments (one WAV per inter-press interval) ─────────
         end_wall = time.time()
@@ -410,7 +445,7 @@ class AudioRecorder:
             (audio_dir / f"audio_{i}_{timestamp_str}.json").write_text(
                 json.dumps(sidecar, indent=2)
             )
-            self._segments.append(
+            segments_out.append(
                 {
                     "audio_file": wav_filename,
                     "segment_id": i,
@@ -437,7 +472,7 @@ class AudioRecorder:
             "clock": first_clock,
         }
         (audio_dir / "audio_full.json").write_text(json.dumps(full_sidecar, indent=2))
-        self._full = {
+        full_out = {
             "audio_file": full_wav_name,
             "start_t_ns": first_ts_ns,
             "duration_s": round(full_duration, 3),
@@ -447,6 +482,19 @@ class AudioRecorder:
             f"  ✓ Saved audio_full: {full_wav_name} "
             f"({full_duration:.1f}s, clock={first_clock})"
         )
+
+        # Publish in one step, and only if this is still the current
+        # episode — a save that outlived a wait_until_idle timeout must
+        # not leak its results into the next episode's metadata.
+        with self._state_lock:
+            if self._episode_gen == gen:
+                self._segments = segments_out
+                self._full = full_out
+            else:
+                print(
+                    "  ! Audio flush finished after the episode moved on; "
+                    "WAVs kept on disk but not recorded in metadata"
+                )
 
 
 # ---------------------------------------------------------------------------

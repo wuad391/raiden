@@ -19,33 +19,36 @@ import selectors
 import struct
 import sys
 import time
-from pathlib import Path
 
-DEVICE_NAME_HINT = "PCsensor FootSwitch Keyboard"
+# Load the shared identifiers/scan by file path: pedal_constants.py is
+# stdlib-only, and skipping the `raiden` package import keeps this script
+# runnable before the project's dependencies are installed.
+import importlib.util
+
+_constants_path = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)),
+    "..",
+    "raiden",
+    "robot",
+    "pedal_constants.py",
+)
+_spec = importlib.util.spec_from_file_location("pedal_constants", _constants_path)
+_constants = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(_constants)
+
+DEVICE_NAME_HINT = _constants.DEVICE_NAME
+PEDAL_LEFT = _constants.PEDAL_LEFT
+PEDAL_MIDDLE = _constants.PEDAL_MIDDLE
+PEDAL_RIGHT = _constants.PEDAL_RIGHT
+find_pedal_event_devices = _constants.find_pedal_event_devices
+
 EV_KEY = 1
 KEY_DOWN = 1
-PEDAL_LEFT = 30  # KEY_A
-PEDAL_MIDDLE = 48  # KEY_B
-PEDAL_RIGHT = 46  # KEY_C
 EVENT_STRUCT = struct.Struct("llHHI")
 
 
 def _matching_devices() -> list[tuple[str, str]]:
-    found = []
-    for d in sorted(
-        Path("/sys/class/input").glob("event*"),
-        key=lambda p: int(p.name[5:]),
-    ):
-        name_file = d / "device" / "name"
-        if not name_file.exists():
-            continue
-        try:
-            name = name_file.read_text().strip()
-        except OSError:
-            continue
-        if DEVICE_NAME_HINT.lower() in name.lower():
-            found.append((f"/dev/input/{d.name}", name))
-    return found
+    return [(d["path"], d["name"]) for d in find_pedal_event_devices()]
 
 
 def list_devices() -> int:
@@ -73,17 +76,29 @@ def listen(seconds: int) -> int:
         )
         return 1
 
-    path, name = devices[0]
-    try:
-        fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
-    except (RuntimeError, PermissionError) as e:
-        print(f"\nFailed to open foot pedal {path}: {e}")
-        if isinstance(e, PermissionError):
+    # The pedal registers several input interfaces whose names all contain
+    # the hint; only one carries the key events. Listen on all of them.
+    fds = []
+    for path, name in devices:
+        try:
+            fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
+        except PermissionError:
+            print(f"\nPermission denied opening {path}.")
             print(
-                "Permission denied — install the udev rule first:\n"
+                "Install the udev rule first:\n"
                 "  sudo bash scripts/install_footpedal_udev.sh\n"
-                "Then unplug and replug the foot pedal."
+                "Then unplug/replug the pedal, and log out and back in if the\n"
+                "script just added you to the 'input' group."
             )
+            for f, _ in fds:
+                os.close(f)
+            return 1
+        except OSError as e:
+            print(f"  ! Could not open {path}: {e}")
+            continue
+        fds.append((fd, path))
+        print(f"  ✓ FootPedal opened: {name} ({path})")
+    if not fds:
         return 1
 
     code_to_label = {
@@ -91,19 +106,19 @@ def listen(seconds: int) -> int:
         PEDAL_MIDDLE: "MIDDLE",
         PEDAL_RIGHT: "RIGHT",
     }
-    print(f"  ✓ FootPedal opened: {name} ({path})")
     print(f"\nListening for {seconds}s — press any pedal button.  Ctrl-C to stop.\n")
     sel = selectors.DefaultSelector()
-    sel.register(fd, selectors.EVENT_READ)
+    for fd, path in fds:
+        sel.register(fd, selectors.EVENT_READ, data=path)
     deadline = time.monotonic() + seconds
     try:
         while True:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 break
-            for _, _ in sel.select(timeout=remaining):
+            for key, _ in sel.select(timeout=remaining):
                 try:
-                    data = os.read(fd, EVENT_STRUCT.size * 64)
+                    data = os.read(key.fd, EVENT_STRUCT.size * 64)
                 except BlockingIOError:
                     continue
                 for i in range(0, len(data) - EVENT_STRUCT.size + 1, EVENT_STRUCT.size):
@@ -115,7 +130,8 @@ def listen(seconds: int) -> int:
         pass
     finally:
         sel.close()
-        os.close(fd)
+        for fd, _ in fds:
+            os.close(fd)
     print("\nDone.")
     return 0
 

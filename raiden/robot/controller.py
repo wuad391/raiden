@@ -388,10 +388,6 @@ class RobotController:
 
         # Track button state for edge detection (button index 0)
         self.last_button_state: Dict[str, float] = {}
-        # Track button index 1 (second physical button) for verdict detection
-        self._last_verdict_state: Dict[str, float] = {}
-        # Track encoder_obs[1].io_inputs for failure-during-recording detection
-        self._last_failure_button_state: Dict[str, float] = {}
 
         # Track original PD gains
         self.kp_gains: Dict[str, np.ndarray] = {}
@@ -538,9 +534,6 @@ class RobotController:
             leader_r_base.gravity_comp_factor = _LEADER_GRAVITY_COMP_FACTOR
             self.leader_r = YAMLeaderRobot(leader_r_base)
             self.last_button_state["leader_r"] = 0.0
-            self._last_verdict_state["leader_r_top"] = 0.0
-            self._last_verdict_state["leader_r_bottom"] = 0.0
-            self._last_failure_button_state["leader_r"] = 0.0
             self.kp_gains["leader_r"] = self.leader_r._robot._kp.copy()
             self.kd_gains["leader_r"] = self.leader_r._robot._kd.copy()
         if self.use_left_leader:
@@ -548,9 +541,6 @@ class RobotController:
             leader_l_base.gravity_comp_factor = _LEADER_GRAVITY_COMP_FACTOR
             self.leader_l = YAMLeaderRobot(leader_l_base)
             self.last_button_state["leader_l"] = 0.0
-            self._last_verdict_state["leader_l_top"] = 0.0
-            self._last_verdict_state["leader_l_bottom"] = 0.0
-            self._last_failure_button_state["leader_l"] = 0.0
             self.kp_gains["leader_l"] = self.leader_l._robot._kp.copy()
             self.kd_gains["leader_l"] = self.leader_l._robot._kd.copy()
 
@@ -750,59 +740,6 @@ class RobotController:
             self.last_button_state["leader_l"] = current_button
 
         return None
-
-    def check_verdict_button(self) -> Optional[str]:
-        """Check if a verdict button was pressed on any leader arm.
-
-        The top button    (io_inputs[0]) signals "success".
-        The bottom button (io_inputs[1]) signals "failure".
-        Uses rising-edge detection per button.
-
-        Returns:
-            "success", "failure", or None.
-        """
-        for name, leader in [("leader_r", self.leader_r), ("leader_l", self.leader_l)]:
-            if leader is None:
-                continue
-            try:
-                _, io_inputs = leader.get_info()
-                top = float(io_inputs[0]) if len(io_inputs) > 0 else 0.0
-                bottom = float(io_inputs[1]) if len(io_inputs) > 1 else 0.0
-                prev_top = self._last_verdict_state.get(f"{name}_top", 0.0)
-                prev_bottom = self._last_verdict_state.get(f"{name}_bottom", 0.0)
-
-                self._last_verdict_state[f"{name}_top"] = top
-                self._last_verdict_state[f"{name}_bottom"] = bottom
-
-                # Rising edge on top button → success
-                if top > 0.5 and prev_top < 0.5:
-                    return "success"
-                # Rising edge on bottom button → failure
-                if bottom > 0.5 and prev_bottom < 0.5:
-                    return "failure"
-            except Exception:
-                pass
-        return None
-
-    def check_failure_button(self) -> bool:
-        """Check if the failure button (encoder_obs[0].io_inputs[1]) was pressed.
-
-        Returns True on the rising edge so the caller can immediately stop
-        recording and mark the demonstration as failure.
-        """
-        for name, leader in [("leader_r", self.leader_r), ("leader_l", self.leader_l)]:
-            if leader is None:
-                continue
-            try:
-                io_inputs = leader.get_encoder_io(encoder_idx=0)
-                current = float(io_inputs[1]) if len(io_inputs) > 1 else 0.0
-                prev = self._last_failure_button_state.get(name, 0.0)
-                self._last_failure_button_state[name] = current
-                if current > 0.5 and prev < 0.5:
-                    return True
-            except Exception:
-                pass
-        return False
 
     def has_robots(self) -> bool:
         """Check if any robots are initialized
