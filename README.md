@@ -31,9 +31,15 @@ See the **[installation guide](https://tri-ml.github.io/raiden/guide/installatio
 Optional extras for this fork:
 
 ```bash
-uv sync --extra audio                      # microphone narration (PyAudio)
 sudo apt install portaudio19-dev           # only on fresh Ubuntu, if PyAudio fails to build
+uv sync --extra audio                      # microphone narration (PyAudio)
+
+# If you installed raiden as a uv tool instead of a checkout:
+uv tool install --reinstall -e ".[zed,audio]"
 ```
+
+Then `rd list_devices` shows your mic under "Microphones" with an index;
+pass a non-default one with `rd record --record-audio --audio-device-index <index>`.
 
 ## Commands
 

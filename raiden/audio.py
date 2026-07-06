@@ -120,6 +120,7 @@ class AudioRecorder:
             _warn(
                 "PyAudio not installed — audio recording disabled.\n"
                 "Install with: uv sync --extra audio\n"
+                '(uv tool installs: uv tool install --reinstall -e ".[zed,audio]")\n'
                 "(also: apt install portaudio19-dev on fresh Ubuntu systems)"
             )
             return
