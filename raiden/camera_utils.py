@@ -248,7 +248,10 @@ def list_devices() -> None:
                 f"{m['name']}{default_tag}"
             )
     else:
-        print("  (none)  — install PyAudio with: uv sync --extra audio")
+        print(
+            "  (none)  — install PyAudio with: uv sync --extra audio\n"
+            '            (uv tool installs: uv tool install --reinstall -e ".[zed,audio]")'
+        )
 
     # ── Auto-generate camera.json if missing ─────────────────────────────
     print("\nConfig files stored in: ~/.config/raiden/")
