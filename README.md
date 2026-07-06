@@ -15,9 +15,9 @@ visualization.
 
 - **Teleop** — leader-follower or SpaceMouse end-effector control, bimanual or single-arm.
 - **Multi-camera recording** — mix ZED and Intel RealSense in one session, scene + wrist roles.
-- **Subtask annotation** — foot pedal logs timestamped boundaries during a recording.
-- **Microphone narration** — optional continuous audio capture, segmented by pedal presses.
-- **Calibration** — automated hand-eye + scene extrinsics via ChArUco boards.
+- **Subtask marking** — press the foot pedal while recording to timestamp each step of the task.
+- **Microphone narration** — optionally record what the operator says, split into one audio clip per pedal press.
+- **Calibration** — automated hand-eye + scene extrinsics via ChArUco boards; capture poses hands-free with the foot pedal.
 - **Depth backends** — RealSense IR, ZED SDK stereo, TRI Stereo, [Fast Foundation Stereo](https://github.com/NVlabs/Fast-FoundationStereo).
 - **Manipulability-aware IK** — [PyRoki](https://github.com/chungmin99/pyroki) + [J-Parse](https://jparse-manip.github.io/).
 - **Dataset output** — flat per-frame format with synced cameras, extrinsics, interpolated joint poses.
@@ -39,7 +39,7 @@ sudo apt install portaudio19-dev           # only on fresh Ubuntu, if PyAudio fa
 
 | Command | What it does |
 |---|---|
-| `rd list_devices` | Enumerate cameras, robot arms, SpaceMouse, foot pedals, microphones |
+| `rd list_devices` | List connected cameras, robot arms, SpaceMouse, foot pedals, microphones |
 | `rd record_calibration_poses` | Record robot poses for camera calibration |
 | `rd calibrate` | Hand-eye + scene-extrinsic calibration |
 | `rd teleop` | Teleoperate without recording |
@@ -74,7 +74,12 @@ Verdict keys:
 | `f` / `F` | failure | `status: "failure"` |
 | any other key | skip | `status: "pending"` |
 | 30 s timeout | skip | `status: "pending"` |
-| Ctrl-C / e-stop during episode | forced failure | `status: "failure"` |
+| Ctrl-C at the verdict prompt | skip | `status: "pending"` |
+
+**Ctrl-C during an episode** is an emergency stop: arms hold for 5 s, return
+home, and the process exits. The interrupted episode is left on disk without
+`complete` metadata and no DB row — it is detected as incomplete and its
+directory is reused by the next episode.
 
 The verdict is written into the SQLite metadata DB. Only `status: "success"`
 demos pass through `rd convert` into the trained dataset. To relabel later,
@@ -95,8 +100,9 @@ Press the foot pedal during a recording to log a timestamped marker.
 ]
 ```
 
-- `t` is on the same nanosecond clock as `robot_data.npz` and the converted
-  camera frames — joinable without offset math.
+- `t` uses the same nanosecond clock as `robot_data.npz` and the converted
+  camera frames, so markers line up with them directly — no offset
+  correction needed.
 - `clock` is `"camera"` on a healthy ZED setup; `"wallclock_fallback"` on the
   rare frame where the camera-clock read failed (so downstream consumers can
   detect and skip those).
@@ -116,13 +122,13 @@ rd record --record-audio
 rd record --record-audio --audio-device-index 3   # pick a non-default mic
 ```
 
-- Mic stream opens at episode start; **audio before the first pedal press
-  is treated as warm-up noise and discarded.**
-- From the first press onwards, two shapes land under
+- The microphone opens when the episode starts; **audio before the first
+  pedal press is treated as warm-up noise and discarded.**
+- From the first press onwards, two kinds of files are written under
   `<recording_dir>/audio/`:
-  - `audio_full.wav` — continuous, first-press → end-of-episode.
-  - `audio_<i>_HHMMSS.wav` — one per inter-press interval (sample-aligned
-    slices of `audio_full`).
+  - `audio_full.wav` — one continuous file, first press → end of episode.
+  - `audio_<i>_HHMMSS.wav` — one clip per gap between presses (each an
+    exact slice of `audio_full`).
 - `metadata.json` gains `audio_full` (a dict) and `audio_segments` (a list).
   Boundaries are on the same camera clock as `event_markers[*].t`.
 - Episodes with zero pedal presses produce no audio files.
@@ -131,6 +137,12 @@ rd record --record-audio --audio-device-index 3   # pick a non-default mic
 - Schema and full layout:
   [`docs/guide/recording.md`](docs/guide/recording.md) §"Audio narration
   aligned with event markers".
+
+### Foot pedal records calibration poses
+
+During `rd record_calibration_poses`, tap the foot pedal to capture the
+current pose — useful when both hands are holding the ChArUco board. The
+leader-arm button and the `r` key still work as before.
 
 ### Downstream propagation
 

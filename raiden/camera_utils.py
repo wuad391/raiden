@@ -103,33 +103,19 @@ def list_spacemice() -> list:
 # Foot pedals (PCsensor FootSwitch via /sys/class/input)
 # ---------------------------------------------------------------------------
 
-_FOOTPEDAL_DEVICE_NAME = "PCsensor FootSwitch Keyboard"
-
 
 def list_footpedals() -> list:
     """Enumerate connected PCsensor FootSwitch devices.
 
-    Reads /sys/class/input directly so this works without device-open
-    permission — useful for verifying udev-rule install before opening
-    the device for real.  Returns a list of ``{"path", "name"}`` dicts;
-    empty list when no matching device is plugged in (or none of them
-    advertise the expected name).
+    Reads /sys/class/input directly, so no device-open permission is
+    needed.  Returns a list of ``{"path", "name"}`` dicts; empty when no
+    matching device is plugged in.
     """
-    found: list = []
-    for event_dir in sorted(
-        Path("/sys/class/input").glob("event*"),
-        key=lambda p: int(p.name[5:]),
-    ):
-        name_file = event_dir / "device" / "name"
-        if not name_file.exists():
-            continue
-        try:
-            name = name_file.read_text().strip()
-        except OSError:
-            continue
-        if _FOOTPEDAL_DEVICE_NAME.lower() in name.lower():
-            found.append({"path": f"/dev/input/{event_dir.name}", "name": name})
-    return found
+    # Local import: a module-top import would pull the whole raiden.robot
+    # package (jax, evdev, ...) into this otherwise-light module.
+    from raiden.robot.pedal_constants import find_pedal_event_devices
+
+    return find_pedal_event_devices()
 
 
 # ---------------------------------------------------------------------------

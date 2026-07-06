@@ -66,14 +66,13 @@ class TeleopInterface(ABC):
     def _open_footpedal_for_subtask_latches(self) -> None:
         """Initialise the subtask Event and bind the pedal callback.
 
-        A single ``threading.Event`` is set on each press; the recorder
-        thread polls it, captures the camera clock once, and fans the
-        timestamp out to ``add_event_marker`` and (when audio is enabled)
-        to ``AudioRecorder.mark_boundary``.  The callback is gated on
-        ``_recording_controller is not None`` so presses outside an
-        active recording are ignored (no soft-pause, no start/stop).
+        During an active recording, presses latch the subtask event that
+        the recorder polls; outside a recording they latch
+        ``_pedal_trigger``, which calibration consumes via
+        ``poll_pedal_trigger`` as a hands-free trigger.
         """
         self._pedal_subtask = threading.Event()
+        self._pedal_trigger = threading.Event()
         # Initialised before the footpedal thread is started so the
         # callback can never race a missing attribute on the first press.
         self._recording_controller = None
@@ -84,6 +83,8 @@ class TeleopInterface(ABC):
         def _cb(_code: int) -> None:
             if self._recording_controller is not None:
                 self._pedal_subtask.set()
+            else:
+                self._pedal_trigger.set()
 
         self._footpedal.on_press(_cb)
         self._footpedal.start()
@@ -119,6 +120,17 @@ class TeleopInterface(ABC):
         buttons.  Default: never triggers."""
         return False
 
+    def poll_pedal_trigger(self) -> bool:
+        """Return True if the pedal was pressed outside an active recording.
+
+        Used by calibration pose recording as a hands-free trigger.
+        Clear-on-read; the latch is initialised in ``open()``.
+        """
+        if self._pedal_trigger.is_set():
+            self._pedal_trigger.clear()
+            return True
+        return False
+
     def drain_pedal_events(self, robot_controller: "RobotController") -> None:
         """Discard any latched pedal events so they don't bleed across phases.
 
@@ -128,6 +140,7 @@ class TeleopInterface(ABC):
         """
         self.poll(robot_controller)
         self.poll_subtask(robot_controller)
+        self.poll_pedal_trigger()
 
     @property
     def uses_leaders(self) -> bool:

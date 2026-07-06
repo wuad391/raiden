@@ -26,6 +26,7 @@ After conversion (``rd convert``) each camera directory is expanded into
 PNG frames and depth maps.
 """
 
+import contextlib
 import json
 import re
 import select
@@ -56,18 +57,30 @@ from raiden.robot.controller import RobotController
 from raiden.utils import fzf_select
 
 
-def _capture_clock(cameras: List["Camera"]) -> "tuple[int, str]":
-    """Read the reference camera clock with fallback.
+@contextlib.contextmanager
+def _deferred_signals():
+    """Hold SIGINT/SIGTERM until the block exits.
 
-    Returns ``(ts_ns, clock_label)``. On a healthy ZED setup the camera
-    clock matches `robot_data.npz` and converted camera frames; on
-    failure we substitute `time.time_ns()` and label the value so
-    downstream consumers can detect the inconsistency.
+    The metadata DB rewrites a whole JSON file per call; an interrupt
+    landing mid-write corrupts the file, and the recovery path resets the
+    collection.  A signal received inside the block is re-raised as
+    KeyboardInterrupt on exit.
     """
+    pending = []
+
+    def _defer(signum, frame):
+        pending.append(signum)
+
+    handlers = {
+        sig: signal.signal(sig, _defer) for sig in (signal.SIGINT, signal.SIGTERM)
+    }
     try:
-        return int(cameras[0].get_current_timestamp_ns()), _CLOCK_CAMERA
-    except (RuntimeError, OSError, ValueError):
-        return time.time_ns(), _CLOCK_FALLBACK
+        yield
+    finally:
+        for sig, handler in handlers.items():
+            signal.signal(sig, handler)
+        if pending and sys.exc_info()[0] is None:
+            raise KeyboardInterrupt
 
 
 # ---------------------------------------------------------------------------
@@ -134,8 +147,8 @@ class DemonstrationRecorder:
         self._robot_frames: List[Dict] = []
         self._start_time: float = 0.0
 
-        # Event markers (only used in marking mode).  Each entry is a tuple
-        # of (camera-clock ns timestamp, seconds-since-recording-start).
+        # Subtask-boundary markers pushed by the foot pedal.  Each entry is
+        # a dict: {"t": <camera-clock ns>, "elapsed_s": <float>, "clock": <str>}.
         self._event_markers: List[Dict] = []
 
     # ------------------------------------------------------------------
@@ -276,11 +289,6 @@ class DemonstrationRecorder:
         self._save_metadata(duration, complete=complete)
 
         return self.recording_dir
-
-    def _capture_clock(self) -> "tuple[int, str]":
-        """Read the reference camera clock with fallback. See module-level
-        ``_capture_clock`` for details."""
-        return _capture_clock(self.cameras)
 
     def add_event_marker(self) -> "Optional[tuple[int, str]]":
         """Record a timestamped subtask-boundary marker.
@@ -815,12 +823,16 @@ def run_recording(
     calibration_result_id = latest_calib["id"] if latest_calib else None
 
     def _copy_calibration(dest_dir: Path) -> None:
+        # Best-effort: a failed copy must not abort the episode bookkeeping.
         calib_src = Path(calibration_file)
-        if calib_src.exists():
+        if not calib_src.exists():
+            print(f"  Warning: calibration file not found at {calib_src}")
+            return
+        try:
             shutil.copy(calib_src, dest_dir / calib_src.name)
             print(f"✓ Calibration copied → {dest_dir / calib_src.name}")
-        else:
-            print(f"  Warning: calibration file not found at {calib_src}")
+        except OSError as e:
+            print(f"  Warning: calibration copy failed: {e}")
 
     # ── optional footpedal (once per session) ────────────────────────────
     interface.open()
@@ -856,6 +868,10 @@ def run_recording(
     def emergency_stop(signum, frame):
         if _active_ctrl[0] is not None:
             _active_ctrl[0].emergency_stop()
+        else:
+            # No robots to stop (between episodes, verdict prompt, teardown):
+            # behave like a normal interrupt instead of swallowing it.
+            raise KeyboardInterrupt
 
     signal.signal(signal.SIGTERM, emergency_stop)
     signal.signal(signal.SIGINT, emergency_stop)
@@ -936,14 +952,10 @@ def run_recording(
             )
             interface.start(robot_controller)
             recorder.start_recording()
-            # NOTE: deliberately NOT calling robot_controller.enable_estop()
-            # here.  Under this fork, the foot pedal is dedicated to subtask
-            # boundaries during recording (see README §"Single-pedal subtask
-            # boundaries").  enable_estop() would arm soft_pause on the LEFT
-            # pedal as a side-effect of every press, which contradicts that
-            # contract.  Emergency stop during recording is Ctrl-C.
-            # (rd teleop and rd serve still use their own enable_estop /
-            # attach_footpedal paths, unaffected by this.)
+            # Deliberately NOT calling robot_controller.enable_estop(): the
+            # pedal is dedicated to subtask boundaries during recording, and
+            # enable_estop() would arm soft_pause on every press.  Emergency
+            # stop during recording is Ctrl-C.
             interface.set_active_recording(robot_controller)
             interface.drain_pedal_events(robot_controller)
 
@@ -982,26 +994,22 @@ def run_recording(
             interface.set_active_recording(None)
             estop = robot_controller.session_estop_requested
 
-            # ── stop episode FIRST so the verdict-prompt wait doesn't
-            #    pollute robot frames / camera video / audio with
-            #    operator idle time (verdict is keyboard-only and may
-            #    take up to 30 s).  Robots return home, cameras and
-            #    audio finalise, metadata is written.
+            # Stop the episode before the verdict prompt so operator idle
+            # time doesn't pollute robot frames, camera video, or audio.
             saved_dir = recorder.stop_recording(complete=not estop)
             recorder = None
-            _active_ctrl[0] = None
-            robot_controller = None  # shut down inside stop_recording
 
-            # ── verdict phase (after recording is saved) ──────────────────
-            if estop:
-                verdict: Optional[str] = "failure"
-            else:
-                verdict = _wait_for_verdict()
-
-            _copy_calibration(saved_dir)
-
-            if estop:
+            # Register the episode in the DB before anything else can fail:
+            # a complete episode with no row is invisible to `rd console`
+            # and never reclaimed.  Signals are deferred across the insert —
+            # an interrupt inside the DB's whole-file JSON rewrite would
+            # corrupt it, and the recovery path resets the collection.
+            demo_id = None
+            with _deferred_signals():
+                _active_ctrl[0] = None
+                robot_controller = None  # shut down inside stop_recording
                 if task_id is not None:
+                    # add_demonstration inserts the row as status="pending".
                     demo_id = db.add_demonstration(
                         teacher_id=teacher_id,
                         task_id=task_id,
@@ -1009,25 +1017,24 @@ def run_recording(
                         camera_config_id=camera_config_id,
                         calibration_result_id=calibration_result_id,
                     )
-                    db.update_demonstration(demo_id, status="failure", converted=False)
+                    if estop:
+                        db.update_demonstration(
+                            demo_id, status="failure", converted=False
+                        )
+
+            _copy_calibration(saved_dir)
+
+            if estop:
                 print("\nRecording aborted — marked as failure.\n")
                 break
 
-            last_saved_dir = saved_dir
+            verdict = _wait_for_verdict()
+            if demo_id is not None and verdict is not None:
+                with _deferred_signals():
+                    db.update_demonstration(demo_id, status=verdict, converted=False)
+                print(f"  Demonstration marked as: {verdict}")
 
-            # ── record demonstration in DB ───────────────────────────────
-            if task_id is not None:
-                demo_id = db.add_demonstration(
-                    teacher_id=teacher_id,
-                    task_id=task_id,
-                    raw_data_path=str(saved_dir),
-                    camera_config_id=camera_config_id,
-                    calibration_result_id=calibration_result_id,
-                )
-                status = verdict if verdict is not None else "pending"
-                db.update_demonstration(demo_id, status=status, converted=False)
-                if verdict:
-                    print(f"  Demonstration marked as: {verdict}")
+            last_saved_dir = saved_dir
 
             print(f"✓ Recording saved to: {saved_dir}\n")
             # Loop back — cameras stay open, robots reinited next iteration.
